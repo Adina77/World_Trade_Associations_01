@@ -46,12 +46,12 @@ FIRST_PAGE = "image00023.jpg"
 LAST_PAGE  = "image00477.jpg"
 
 # Seconds to wait between API calls.
-# Raise this to ~4-8 if you see rate-limit errors; lower to 2 if processing is slow.
+# Raise this to ~4-8 if you see rate-limit errors; lower to 0.5 if processing is slow.
 DELAY = 1
 
 PROMPT = """\
 This is a scanned page from a printed reference book called \
-"World Guide to Trade Associations" (published circa 2001).
+"World Guide to Trade Associations" (published 2002).
 The page is set in five columns of small print.
 
 Extract every trade association entry visible on this page.
@@ -59,10 +59,21 @@ Extract every trade association entry visible on this page.
 ──────────────────────────────────────
 HOW THE BOOK IS STRUCTURED
 ──────────────────────────────────────
-Country headers
-  Country names (e.g. "France", "Germany", "South Africa") appear as bold
-  section headings. Every entry below a country heading belongs to that country
-  until the next heading appears. Headers can start mid-column.
+Country identification — TWO sources, use both
+  1. Running page header: Every page has a header line at the very top showing
+     the current country, in a format like:
+         "France: Syndicat   05273 — 05460"
+         "05461 —   France: Syndicat"
+     The country name is the word(s) before the colon. Use this as the default
+     country for all entries on the page.
+
+  2. Section headers in the body: Country names also appear as bold headings
+     within the column text when a new country section begins mid-page.
+     When you see one, switch the country for all subsequent entries.
+
+  IMPORTANT: Each page is processed independently with no knowledge of prior
+  pages. Always read the running page header at the top to establish the country,
+  even if no section header appears in the body text.
 
 Entry structure
   Each entry ends with a 5-digit sequential ID number (e.g. 06012, 15334)
