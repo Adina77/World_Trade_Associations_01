@@ -1,0 +1,13 @@
+# API keys
+.env
+
+# Script input
+WorldGuideTrade_bookpages/
+
+# Script output
+ocr_output/
+
+# Python
+__pycache__/
+*.pyc
+.ven/
