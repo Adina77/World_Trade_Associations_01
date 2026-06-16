@@ -6,7 +6,7 @@ Sends each scanned page image to the Gemini API and extracts structured
 association data (country, name, address, focus, ID number).
 
 Dependencies — install in your virtualenv:
-    pip install google-generativeai Pillow python-dotenv
+    pip install google-genai Pillow python-dotenv
 
 Usage:
     python ocr_pipeline.py
@@ -22,7 +22,7 @@ import re
 import time
 from pathlib import Path
 
-import google.generativeai as genai
+import google.genai as genai
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -196,8 +196,7 @@ def main():
         print("ERROR: GOOGLE_API_KEY not found. Create a .env file containing:\n  GOOGLE_API_KEY=your_key_here")
         return
 
-    genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel(MODEL)
+    client = genai.Client(api_key=API_KEY)
 
     all_images = sorted(IMAGE_DIR.glob("*.jpg"))
     if not all_images:
@@ -227,7 +226,7 @@ def main():
 
         try:
             img      = Image.open(img_path)
-            response = model.generate_content([PROMPT, img])
+            response = client.models.generate_content(model=MODEL, contents=[PROMPT, img])
             entries  = parse_response(response.text)
             save_page(img_path.name, entries)
             print(f"{len(entries)} entries")
