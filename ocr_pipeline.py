@@ -74,7 +74,14 @@ Entry structure
       - T: (phone); Fax: (fax)       ← optional: phone, fax
       - Founded: YYYY; Members: N    ← optional: year founded, member count
       - Focus: <industry/sector>     ← always present; the sector classification
+      Periodicals <pub name> (freq)  ← OPTIONAL: some entries list publications here
       ........ 12345                 ← 5-digit entry ID
+
+  IMPORTANT: Some entries include a "Periodicals" line between the Focus field
+  and the ID number, listing journals or newsletters the association publishes
+  (e.g. "Periodicals Annual Report (yearly) - Newsletter (monthly)").
+  This Periodicals line is NOT part of the Focus field. Stop the focus text
+  before any "Periodicals" content. Do not include publication names in focus.
 
 ──────────────────────────────────────
 FIELDS TO EXTRACT
@@ -86,7 +93,8 @@ For each entry return these five fields:
   name     — the full association name
   address  — everything between the name and the Focus field
               (street, city, phone, fax, president, founded date, member count, etc.)
-  focus    — the text that follows "Focus:" — the industry or sector description
+  focus    — the text that follows "Focus:" — the industry or sector description only;
+              stop before any "Periodicals" line that may follow
 
 ──────────────────────────────────────
 OUTPUT FORMAT
