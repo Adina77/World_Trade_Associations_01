@@ -4,7 +4,7 @@ Test reasoning configurations on image00050.jpg and compare against the 3.5 Flas
 
 Three configurations tested:
   1. gemini-2.5-flash      — capped thinking budget (1024 tokens): avoids 10-min waits
-  2. gemini-3.1-flash-lite — high thinking: more reasoning to fix ID-reading errors
+  2. gemini-3.1-flash-lite — high thinking: more reasoning to fix ID-reading etc. errors
   3. gemini-3.1-flash-lite — medium thinking: balance of speed and accuracy
 
 Baseline: the 3.5 Flash result for image00050.jpg already in progress.jsonl.

@@ -42,9 +42,11 @@ THINKING_CONFIG = types.GenerateContentConfig(
 
 IMAGE_DIR = Path(__file__).parent / "WorldGuideTrade_bookpages"
 
-OUTPUT_DIR      = Path(__file__).parent / "ocr_output"
-CHECKPOINT_FILE = OUTPUT_DIR / "progress.jsonl"   # One JSON record per page
-FINAL_CSV       = OUTPUT_DIR / "associations_raw.csv"
+OUTPUT_DIR           = Path(__file__).parent / "ocr_output"
+CHECKPOINT_FILE      = OUTPUT_DIR / "progress.jsonl"   # One JSON record per page
+FINAL_CSV            = OUTPUT_DIR / "associations_raw.csv"
+FAILED_PAGES_FILE    = OUTPUT_DIR / "failed_pages.jsonl"   # Append-only log of failures
+FAILED_SUMMARY_FILE  = OUTPUT_DIR / "failed_pages_summary.txt"  # Human-readable, regenerated each run
 
 # Data pages only — front matter ends at image00022, indexes begin at image00478.
 FIRST_PAGE = "image00023.jpg"
@@ -163,6 +165,13 @@ def save_page(page_name: str, entries: list):
         f.write(json.dumps({"page": page_name, "entries": entries}, ensure_ascii=False) + "\n")
 
 
+def log_failure(page_name: str, error_type: str, error_msg: str):
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    record = {"page": page_name, "error_type": error_type, "error": error_msg}
+    with open(FAILED_PAGES_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def is_transient_error(e: Exception) -> bool:
     """Return True for server-side errors that are worth retrying."""
     msg = str(e).lower()
@@ -205,6 +214,38 @@ def build_csv():
         writer.writerows(rows)
 
     print(f"Saved {len(rows):,} entries → {FINAL_CSV}")
+
+
+def build_failed_summary():
+    """Write a human-readable list of pages that failed and have not yet been processed successfully."""
+    done = load_done()
+
+    if not FAILED_PAGES_FILE.exists():
+        return
+
+    # Read all logged failures; keep only the most-recent record per page.
+    latest = {}
+    with open(FAILED_PAGES_FILE, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rec = json.loads(line)
+                latest[rec["page"]] = rec
+
+    # Pages that have since been processed successfully are no longer "failed".
+    still_failed = {p: v for p, v in latest.items() if p not in done}
+
+    with open(FAILED_SUMMARY_FILE, "w", encoding="utf-8") as f:
+        f.write(f"Failed pages — {len(still_failed)} not yet successfully processed\n")
+        f.write("=" * 70 + "\n\n")
+        for page in sorted(still_failed):
+            info = still_failed[page]
+            f.write(f"{page}  [{info['error_type']}]  {info['error']}\n")
+
+    if still_failed:
+        print(f"  {len(still_failed)} page(s) failed — see {FAILED_SUMMARY_FILE}")
+    else:
+        print("  No outstanding failed pages.")
 
 
 def main():
@@ -250,9 +291,10 @@ def main():
                 break
 
             except json.JSONDecodeError as e:
-                # Model returned something unparseable; save blank so we skip on retry
-                print(f"JSON parse error ({e}) — saving blank")
-                save_page(img_path.name, [])
+                # Model returned unparseable JSON.  Do NOT save to checkpoint so
+                # the page will be retried on the next run (possibly with a better model).
+                print(f"JSON parse error — logged to failed_pages")
+                log_failure(img_path.name, "json_parse_error", str(e))
                 break
 
             except Exception as e:
@@ -263,9 +305,10 @@ def main():
                     time.sleep(wait)
                     print(f"[{i:>4}/{len(todo)}]  {img_path.name}", end="  ...  ", flush=True)
                 else:
-                    # Non-transient error or retries exhausted: log and skip.
-                    # Not saved to checkpoint so the page will be retried on the next run.
+                    # Non-transient error or retries exhausted.  Not saved to checkpoint
+                    # so the page will be retried on the next run.
                     print(f"ERROR: {e}")
+                    log_failure(img_path.name, "api_error", str(e))
                     break
 
         if i < len(todo):
@@ -274,6 +317,7 @@ def main():
     print()
     print("All pages processed. Building final CSV ...")
     build_csv()
+    build_failed_summary()
     print("Done.")
 
 
