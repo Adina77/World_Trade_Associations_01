@@ -29,7 +29,7 @@ from PIL import Image
 load_dotenv()   # Reads the .env file in the project folder (if present)
 
 
-# ── Configuration — edit these before running ─────────────────────────────────
+# Configuration — edit these before running 
 
 API_KEY = os.environ["GOOGLE_API_KEY"]   # Set this in your .env file (see .env.example)
 
@@ -48,8 +48,6 @@ LAST_PAGE  = "image00477.jpg"
 # Seconds to wait between API calls.
 # Raise this to 6-8 if you see rate-limit errors; lower to 2 if processing is slow.
 DELAY = 4
-
-# ──────────────────────────────────────────────────────────────────────────────
 
 PROMPT = """\
 This is a scanned page from a printed reference book called \
