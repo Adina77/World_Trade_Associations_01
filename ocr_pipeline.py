@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import google.genai as genai
+from google.genai import types
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -33,7 +34,11 @@ load_dotenv()   # Reads the .env file in the project folder (if present)
 
 API_KEY = os.environ["GOOGLE_API_KEY"]   # Set this in your .env file (see .env.example)
 
-MODEL = "gemini-3.5-flash"      # Check for updates on models and pricing
+MODEL = "gemini-3.1-flash-lite"  # Check for updates on models and pricing
+
+THINKING_CONFIG = types.GenerateContentConfig(
+    thinking_config=types.ThinkingConfig(thinking_budget=2048)
+)
 
 IMAGE_DIR = Path(__file__).parent / "WorldGuideTrade_bookpages"
 
@@ -48,6 +53,10 @@ LAST_PAGE  = "image00477.jpg"
 # Seconds to wait between API calls.
 # Raise this to ~4-8 if you see rate-limit errors; lower to 0.5 if processing is slow.
 DELAY = 1
+
+# Retry settings for transient server errors (503, 500, 429, etc.)
+MAX_RETRIES  = 4    # total attempts per page (1 original + 3 retries)
+RETRY_BACKOFF = 10  # seconds before first retry; doubles each attempt (10, 20, 40 …)
 
 PROMPT = """\
 This is a scanned page from a printed reference book called \
@@ -154,6 +163,13 @@ def save_page(page_name: str, entries: list):
         f.write(json.dumps({"page": page_name, "entries": entries}, ensure_ascii=False) + "\n")
 
 
+def is_transient_error(e: Exception) -> bool:
+    """Return True for server-side errors that are worth retrying."""
+    msg = str(e).lower()
+    return any(token in msg for token in ("503", "500", "502", "504", "429",
+                                          "unavailable", "overloaded", "quota"))
+
+
 def parse_response(text: str) -> list:
     """Strip markdown code fences if the model added them, then parse JSON."""
     text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.MULTILINE)
@@ -224,21 +240,33 @@ def main():
     for i, img_path in enumerate(todo, 1):
         print(f"[{i:>4}/{len(todo)}]  {img_path.name}", end="  ...  ", flush=True)
 
-        try:
-            img      = Image.open(img_path)
-            response = client.models.generate_content(model=MODEL, contents=[PROMPT, img])
-            entries  = parse_response(response.text)
-            save_page(img_path.name, entries)
-            print(f"{len(entries)} entries")
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                img      = Image.open(img_path)
+                response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=THINKING_CONFIG)
+                entries  = parse_response(response.text)
+                save_page(img_path.name, entries)
+                print(f"{len(entries)} entries")
+                break
 
-        except json.JSONDecodeError as e:
-            # Model returned something unparseable; save blank so we skip on retry
-            print(f"JSON parse error ({e}) — saving blank")
-            save_page(img_path.name, [])
+            except json.JSONDecodeError as e:
+                # Model returned something unparseable; save blank so we skip on retry
+                print(f"JSON parse error ({e}) — saving blank")
+                save_page(img_path.name, [])
+                break
 
-        except Exception as e:
-            # Don't save to checkpoint so the page is retried on the next run
-            print(f"ERROR: {e}")
+            except Exception as e:
+                if is_transient_error(e) and attempt < MAX_RETRIES:
+                    wait = RETRY_BACKOFF * (2 ** (attempt - 1))
+                    print(f"\n       server error (attempt {attempt}/{MAX_RETRIES}): {e}")
+                    print(f"       retrying in {wait}s ...", flush=True)
+                    time.sleep(wait)
+                    print(f"[{i:>4}/{len(todo)}]  {img_path.name}", end="  ...  ", flush=True)
+                else:
+                    # Non-transient error or retries exhausted: log and skip.
+                    # Not saved to checkpoint so the page will be retried on the next run.
+                    print(f"ERROR: {e}")
+                    break
 
         if i < len(todo):
             time.sleep(DELAY)

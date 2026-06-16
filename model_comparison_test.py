@@ -32,22 +32,22 @@ OUT_DIR    = BASE_DIR / "ocr_output" / "model_comparison"
 TEST_PAGE = "image00050.jpg"
 
 CONFIGS = [
-    {
-        "name":   "gemini-2.5-flash",
-        "desc":   "capped thinking (1024 tokens)",
-        "slug":   "flash25-capped1024",
-        "config": types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_budget=1024)
-        ),
-    },
-    {
-        "name":   "gemini-3.1-flash-lite",
-        "desc":   "high thinking (8192 tokens)",
-        "slug":   "flash31lite-high",
-        "config": types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_budget=8192)
-        ),
-    },
+    # {
+    #     "name":   "gemini-2.5-flash",
+    #     "desc":   "capped thinking (1024 tokens)",
+    #     "slug":   "flash25-capped1024",
+    #     "config": types.GenerateContentConfig(
+    #         thinking_config=types.ThinkingConfig(thinking_budget=1024)
+    #     ),
+    # },
+    # {
+    #     "name":   "gemini-3.1-flash-lite",
+    #     "desc":   "high thinking (8192 tokens)",
+    #     "slug":   "flash31lite-high",
+    #     "config": types.GenerateContentConfig(
+    #         thinking_config=types.ThinkingConfig(thinking_budget=8192)
+    #     ),
+    # },
     {
         "name":   "gemini-3.1-flash-lite",
         "desc":   "medium thinking (2048 tokens)",
@@ -174,12 +174,12 @@ def country_counts(entries: list) -> dict:
 
 def print_sample(entries: list, n: int = 3):
     for entry in entries[:n]:
-        print(f"  [{entry.get('id')}] {entry.get('name', '')[:60]}")
+        print(f"  [{entry.get('id')}] ({entry.get('country', '?')}) {entry.get('name', '')[:52]}")
         print(f"       focus: {entry.get('focus', '')}")
     if len(entries) > n:
         last = entries[-1]
         print(f"  ...")
-        print(f"  [{last.get('id')}] {last.get('name', '')[:60]}  (last entry)")
+        print(f"  [{last.get('id')}] ({last.get('country', '?')}) {last.get('name', '')[:52]}  (last entry)")
 
 
 def main():
@@ -267,7 +267,7 @@ def main():
     for _, (label, entries) in all_results.items():
         print(f"  {label:<45s} {len(entries):3d} entries")
     print(f"\n  Full JSON outputs saved to: {OUT_DIR}")
-    print(f"  To diff: diff {OUT_DIR}/baseline_flash35.json {OUT_DIR}/flash25-capped1024.json")
+    print(f"  To diff: diff {OUT_DIR}/flash31lite-high.json {OUT_DIR}/flash31lite-medium.json")
 
 
 if __name__ == "__main__":
