@@ -33,7 +33,7 @@ load_dotenv()   # Reads the .env file in the project folder (if present)
 
 API_KEY = os.environ["GOOGLE_API_KEY"]   # Set this in your .env file (see .env.example)
 
-MODEL = "gemini-2.0-flash"      # Free-tier friendly; try "gemini-2.5-flash" if available
+MODEL = "gemini-3.5-flash"      # Check for updates on models and pricing
 
 IMAGE_DIR = Path(__file__).parent / "WorldGuideTrade_bookpages"
 
@@ -46,8 +46,8 @@ FIRST_PAGE = "image00023.jpg"
 LAST_PAGE  = "image00477.jpg"
 
 # Seconds to wait between API calls.
-# Raise this to 6-8 if you see rate-limit errors; lower to 2 if processing is slow.
-DELAY = 4
+# Raise this to ~4-8 if you see rate-limit errors; lower to 2 if processing is slow.
+DELAY = 1
 
 PROMPT = """\
 This is a scanned page from a printed reference book called \
