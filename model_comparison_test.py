@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Compare two cheaper Gemini models against the existing Flash 3.5 baseline
-for a single page, to decide whether to switch for the remainder of the run.
+Test reasoning configurations on image00050.jpg and compare against the 3.5 Flash baseline.
 
-Baseline: the Flash 3.5 result for image00050.jpg already in progress.jsonl.
-New models tested: gemini-2.5-flash, gemini-3.1-flash-lite.
+Three configurations tested:
+  1. gemini-2.5-flash      — capped thinking budget (1024 tokens): avoids 10-min waits
+  2. gemini-3.1-flash-lite — high thinking: more reasoning to fix ID-reading errors
+  3. gemini-3.1-flash-lite — medium thinking: balance of speed and accuracy
 
-Full outputs are saved to ocr_output/model_comparison/ so I can diff them.
-
+Baseline: the 3.5 Flash result for image00050.jpg already in progress.jsonl.
+Full outputs saved to ocr_output/model_comparison/ for diffing.
 """
 
 import json
@@ -17,6 +18,7 @@ import time
 from pathlib import Path
 
 import google.genai as genai
+from google.genai import types
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -29,9 +31,31 @@ OUT_DIR    = BASE_DIR / "ocr_output" / "model_comparison"
 
 TEST_PAGE = "image00050.jpg"
 
-MODELS = [
-    "gemini-2.5-flash",
-    "gemini-3.1-flash-lite",
+CONFIGS = [
+    {
+        "name":   "gemini-2.5-flash",
+        "desc":   "capped thinking (1024 tokens)",
+        "slug":   "flash25-capped1024",
+        "config": types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=1024)
+        ),
+    },
+    {
+        "name":   "gemini-3.1-flash-lite",
+        "desc":   "high thinking (8192 tokens)",
+        "slug":   "flash31lite-high",
+        "config": types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=8192)
+        ),
+    },
+    {
+        "name":   "gemini-3.1-flash-lite",
+        "desc":   "medium thinking (2048 tokens)",
+        "slug":   "flash31lite-medium",
+        "config": types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=2048)
+        ),
+    },
 ]
 
 PROMPT = """\
@@ -187,28 +211,29 @@ def main():
             json.dumps(baseline, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-    # ── New models ───────────────────────────────────────────────────────────
+    # ── Configurations ───────────────────────────────────────────────────────
     client = genai.Client(api_key=api_key)
     img = Image.open(IMAGE_PATH)
 
     all_results: dict = {}
 
-    for model_name in MODELS:
+    for cfg in CONFIGS:
+        label = f"{cfg['name']} ({cfg['desc']})"
         print(f"\n{'='*62}")
-        print(f"  Running {model_name} ...")
+        print(f"  Running {label} ...")
         print(f"{'='*62}")
         start = time.time()
         try:
             response = client.models.generate_content(
-                model=model_name,
+                model=cfg["name"],
                 contents=[PROMPT, img],
+                config=cfg["config"],
             )
             elapsed = time.time() - start
             entries = parse_response(response.text)
-            all_results[model_name] = entries
+            all_results[cfg["slug"]] = (label, entries)
 
-            safe_name = model_name.replace("/", "_").replace(".", "-")
-            out_file = OUT_DIR / f"{safe_name}.json"
+            out_file = OUT_DIR / f"{cfg['slug']}.json"
             out_file.write_text(
                 json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -222,8 +247,7 @@ def main():
         except json.JSONDecodeError as e:
             elapsed = time.time() - start
             print(f"  JSON parse error after {elapsed:.1f}s: {e}")
-            safe_name = model_name.replace("/", "_").replace(".", "-")
-            raw_file = OUT_DIR / f"{safe_name}_raw.txt"
+            raw_file = OUT_DIR / f"{cfg['slug']}_raw.txt"
             raw_file.write_text(response.text, encoding="utf-8")
             print(f"  Raw response saved to {raw_file.name}")
 
@@ -231,7 +255,7 @@ def main():
             elapsed = time.time() - start
             print(f"  ERROR after {elapsed:.1f}s: {e}")
 
-        if model_name != MODELS[-1]:
+        if cfg is not CONFIGS[-1]:
             time.sleep(1)
 
     # ── Summary ──────────────────────────────────────────────────────────────
@@ -239,11 +263,11 @@ def main():
     print("  SUMMARY")
     print(f"{'='*62}")
     if baseline is not None:
-        print(f"  gemini-3.5-flash (baseline):       {len(baseline):3d} entries")
-    for model_name, entries in all_results.items():
-        print(f"  {model_name:<35s} {len(entries):3d} entries")
+        print(f"  gemini-3.5-flash (baseline):              {len(baseline):3d} entries")
+    for _, (label, entries) in all_results.items():
+        print(f"  {label:<45s} {len(entries):3d} entries")
     print(f"\n  Full JSON outputs saved to: {OUT_DIR}")
-    print(f"  To diff: diff {OUT_DIR}/baseline_flash35.json {OUT_DIR}/gemini-2-5-flash.json")
+    print(f"  To diff: diff {OUT_DIR}/baseline_flash35.json {OUT_DIR}/flash25-capped1024.json")
 
 
 if __name__ == "__main__":
