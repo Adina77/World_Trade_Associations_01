@@ -1,3 +1,20 @@
+#!/usr/bin/env python3
+"""
+OCR pipeline for World Guide to Trade Associations.
+
+Sends each scanned page image to the Gemini API and extracts structured
+association data (country, name, address, focus, ID number).
+
+Dependencies — install in your virtualenv:
+    pip install google-generativeai Pillow python-dotenv
+
+Usage:
+    python ocr_pipeline.py
+
+Progress is saved after every page, so the script can be safely interrupted
+and restarted. Pages already processed are skipped automatically.
+"""
+
 import csv
 import json
 import os
@@ -12,11 +29,11 @@ from PIL import Image
 load_dotenv()   # Reads the .env file in the project folder (if present)
 
 
-# Configuration — edit these before running
+# ── Configuration — edit these before running ─────────────────────────────────
 
 API_KEY = os.environ["GOOGLE_API_KEY"]   # Set this in your .env file (see .env.example)
 
-MODEL = "gemini-2.0-flash"      # Free-tier; try "gemini-2.5-flash" 
+MODEL = "gemini-2.0-flash"      # Free-tier friendly; try "gemini-2.5-flash" if available
 
 IMAGE_DIR = Path(__file__).parent / "WorldGuideTrade_bookpages"
 
@@ -24,13 +41,19 @@ OUTPUT_DIR      = Path(__file__).parent / "ocr_output"
 CHECKPOINT_FILE = OUTPUT_DIR / "progress.jsonl"   # One JSON record per page
 FINAL_CSV       = OUTPUT_DIR / "associations_raw.csv"
 
+# Data pages only — front matter ends at image00022, indexes begin at image00478.
+FIRST_PAGE = "image00023.jpg"
+LAST_PAGE  = "image00477.jpg"
+
 # Seconds to wait between API calls.
 # Raise this to 6-8 if you see rate-limit errors; lower to 2 if processing is slow.
 DELAY = 4
 
+# ──────────────────────────────────────────────────────────────────────────────
+
 PROMPT = """\
 This is a scanned page from a printed reference book called \
-"World Guide to Trade Associations" (published 2002).
+"World Guide to Trade Associations" (published circa 2001).
 The page is set in five columns of small print.
 
 Extract every trade association entry visible on this page.
@@ -159,10 +182,20 @@ def main():
     genai.configure(api_key=API_KEY)
     model = genai.GenerativeModel(MODEL)
 
-    images = sorted(IMAGE_DIR.glob("*.jpg"))
-    if not images:
+    all_images = sorted(IMAGE_DIR.glob("*.jpg"))
+    if not all_images:
         print(f"No JPG files found in {IMAGE_DIR}")
         return
+
+    # Trim to data-page range only (no front matter or back-matter indexes)
+    names = [p.name for p in all_images]
+    try:
+        start = names.index(FIRST_PAGE)
+        end   = names.index(LAST_PAGE) + 1
+    except ValueError as e:
+        print(f"ERROR: boundary page not found — {e}")
+        return
+    images = all_images[start:end]
 
     done = load_done()
     todo = [p for p in images if p.name not in done]
