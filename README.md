@@ -10,6 +10,8 @@ The generated CSV file is cleaned with the script ocr_cleanup.py.
 Errors are then checked with ocr_error_check.py, and errors can be decreased
 by re-submitting to a superior Gemini model, using error_redo.py.
 
+For now the repository is missing the scanned book pages (WorldGuideTrade_bookpages directory) due to the size of the image file collection.
+
 Dependencies — install in your virtualenv:
     pip install google-genai Pillow python-dotenv
 
