@@ -1,0 +1,16 @@
+Page 251 will not process because we are tripping the API's safety filters, 
+which is why it is returning a blank NoneType response.Gemini AI scanned 
+through the image for Page 251 (not the API), and and found two massive red
+flags for the AI's "Dangerous Content" filter sitting right in the text:
+Entry 15638 (Far right column): "Colegio Oficial de Ingenieros de Armamento" 
+(Official College of Armament Engineers). The AI sees the word "Armamento" 
+and the focus field "Arms & Ammun" (Arms and Ammunition). This instantly 
+trips the weapons and violence filter.Entry 15597 (Second column): "Asociación 
+Nacional Empresarial de la Industria Farmacéutica". The focus field is listed 
+simply as "Drugs". This immediately trips the illicit substances filter.Because 
+standard models are programmed to refuse to generate text involving weapons or drugs, 
+the API aborts the generation and sends your script a blank page. As long as 
+the script is using the updated CONFIG variable (the one that sets all the 
+HARM_CATEGORY thresholds to BLOCK_NONE), it will completely disable the bouncer. 
+Whether I use gemini-2.5-pro or gemini-3.5-flash, the page will process perfectly 
+once those filters are forced off.

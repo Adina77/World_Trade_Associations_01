@@ -32,7 +32,9 @@ load_dotenv()   # Reads the .env file in the project folder (if present)
 
 # Configuration — edit these before running 
 
-API_KEY = os.environ["GOOGLE_API_KEY"]   # Set this in your .env file (see .env.example)
+# Set the API_KEY in the .env file (see .env.example). Put .env in .gitignore!
+# Be sure to use correct key, paid tier for models that require it.
+API_KEY = os.environ["GOOGLE_API_KEY"]   
 
 # Bulk-run model (gemini-3.1-flash-lite, thinking budget 2048 tokens):
 # MODEL = "gemini-3.1-flash-lite"
@@ -40,9 +42,23 @@ API_KEY = os.environ["GOOGLE_API_KEY"]   # Set this in your .env file (see .env.
 #     thinking_config=types.ThinkingConfig(thinking_budget=2048)
 # )
 
-# Re-run model for problem pages — gemini-3.5-flash with forced JSON output:
+# Re-run with better model for problem pages
 MODEL = "gemini-3.5-flash"
-JSON_CONFIG = types.GenerateContentConfig(response_mime_type="application/json")
+# MODEL = "gemini-2.5-pro"
+
+# Force JSON output and disable safety filters.
+# Needed because legitimate trade association entries (e.g. "Armament Engineers",
+# focus field "Drugs" for a pharmaceutical body) otherwise trip the weapons /
+# substances filters and return a silent None response.
+JSON_CONFIG = types.GenerateContentConfig(
+    response_mime_type="application/json",
+    safety_settings=[
+        types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",       threshold="BLOCK_NONE"),
+        types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_NONE"),
+        types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+        types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+    ]
+)
 
 IMAGE_DIR = Path(__file__).parent / "WorldGuideTrade_bookpages"
 
@@ -57,7 +73,8 @@ FIRST_PAGE = "image00023.jpg"
 LAST_PAGE  = "image00400.jpg"
 
 # Seconds to wait between API calls.
-# Raise this to ~4-8 if you see rate-limit errors; lower to 0.5 if processing is slow.
+# Raise this to ~4-8 if you see rate-limit errors.
+# Should not be an issue for paid tier; free tier may hit rate limit.
 DELAY = 1
 
 # Retry settings for transient server errors (503, 500, 429, etc.)
@@ -223,6 +240,9 @@ def build_csv():
                 entry.setdefault("address", "")
                 entry.setdefault("focus", "")
                 entry["source_page"] = rec["page"]
+                # Sanitize embedded newlines so every CSV parser handles the file correctly
+                for field in ("country", "id", "name", "address", "focus"):
+                    entry[field] = entry[field].replace('\r\n', ' ').replace('\r', ' ').replace('\n', ' ')
                 rows.append(entry)
 
     if skipped_pages:
