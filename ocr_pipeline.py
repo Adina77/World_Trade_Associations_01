@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 import google.genai as genai
-# from google.genai import types  # used when THINKING_CONFIG is active
+from google.genai import types
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -40,8 +40,9 @@ API_KEY = os.environ["GOOGLE_API_KEY"]   # Set this in your .env file (see .env.
 #     thinking_config=types.ThinkingConfig(thinking_budget=2048)
 # )
 
-# Re-run model for problem pages — gemini-3.5-flash with default thinking:
+# Re-run model for problem pages — gemini-3.5-flash with forced JSON output:
 MODEL = "gemini-3.5-flash"
+JSON_CONFIG = types.GenerateContentConfig(response_mime_type="application/json")
 
 IMAGE_DIR = Path(__file__).parent / "WorldGuideTrade_bookpages"
 
@@ -309,7 +310,7 @@ def main():
             try:
                 img      = Image.open(img_path)
                 # response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=THINKING_CONFIG)
-                response = client.models.generate_content(model=MODEL, contents=[PROMPT, img])
+                response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=JSON_CONFIG)
                 entries  = parse_response(response.text)
                 save_page(img_path.name, entries)
                 print(f"{len(entries)} entries")
