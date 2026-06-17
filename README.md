@@ -23,6 +23,6 @@ Run the python scripts sequentially:
     python error_redo.py
 
 You need an API key from Google AI Studio. Place the key in an .env file 
-within your working directory. See the example file, .env.example.
+within your working directory. See the example file, .env.example. Be sure to add this file to .gitignore.
 
 To compare models to choose for larger batches, the optional script model_comparison_test.py can be used.
