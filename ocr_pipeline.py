@@ -40,8 +40,8 @@ API_KEY = os.environ["GOOGLE_API_KEY"]   # Set this in your .env file (see .env.
 #     thinking_config=types.ThinkingConfig(thinking_budget=2048)
 # )
 
-# Re-run model for problem pages — gemini-2.5-flash with default thinking:
-MODEL = "gemini-2.5-flash"
+# Re-run model for problem pages — gemini-3.5-flash with default thinking:
+MODEL = "gemini-3.5-flash"
 
 IMAGE_DIR = Path(__file__).parent / "WorldGuideTrade_bookpages"
 
