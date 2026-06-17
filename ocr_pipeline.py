@@ -37,14 +37,11 @@ load_dotenv()   # Reads the .env file in the project folder (if present)
 API_KEY = os.environ["GOOGLE_API_KEY"]   
 
 # Bulk-run model (gemini-3.1-flash-lite, thinking budget 2048 tokens):
-# MODEL = "gemini-3.1-flash-lite"
-# THINKING_CONFIG = types.GenerateContentConfig(
-#     thinking_config=types.ThinkingConfig(thinking_budget=2048)
-# )
+MODEL = "gemini-3.1-flash-lite"
 
 # Re-run with better model for problem pages
 # MODEL = "gemini-3.5-flash"
-MODEL = "gemini-2.5-pro"
+# MODEL = "gemini-2.5-pro"
 
 # Primary config: force JSON output + disable safety filters.
 # Needed because legitimate entries (e.g. "Armament Engineers", focus "Drugs"
@@ -66,6 +63,13 @@ JSON_CONFIG = types.GenerateContentConfig(
 # and the safety refusal interact and produce a silent null response on some pages).
 # The regex parser in parse_response() handles the output instead.
 FALLBACK_CONFIG = types.GenerateContentConfig(safety_settings=_SAFETY_OFF)
+
+# Thinking config: used with gemini-3.1-flash-lite for bulk processing.
+# No JSON mime type — parse_response() handles stripping any markdown fences.
+THINKING_CONFIG = types.GenerateContentConfig(
+    thinking_config=types.ThinkingConfig(thinking_budget=2048),
+    safety_settings=_SAFETY_OFF,
+)
 
 IMAGE_DIR = Path(__file__).parent / "WorldGuideTrade_bookpages"
 
@@ -357,12 +361,11 @@ def main():
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 img      = Image.open(img_path)
-                # response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=THINKING_CONFIG)
-                response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=JSON_CONFIG)
+                response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=THINKING_CONFIG)
+                # response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=JSON_CONFIG)
                 if response.text is None:
-                    # JSON mode + safety refusal can interact to produce a silent null.
-                    # Retry once without the JSON mime-type enforcement.
-                    print("JSON_CONFIG returned None — retrying with FALLBACK_CONFIG ...", end="  ", flush=True)
+                    # Retry once without thinking config in case of a silent null.
+                    print("THINKING_CONFIG returned None — retrying with FALLBACK_CONFIG ...", end="  ", flush=True)
                     response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=FALLBACK_CONFIG)
                 if response.text is None:
                     block_reason = "unknown"

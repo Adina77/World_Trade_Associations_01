@@ -8,14 +8,19 @@ The generated CSV file is cleaned with the script ocr_cleanup.py. Errors are the
 For now the repository is missing the scanned book pages (WorldGuideTrade_bookpages directory) due to the size of the image file collection.
 
 Dependencies — install in your virtualenv:
-    pip install google-genai Pillow python-dotenv
 
-Usage:
-Run the python scripts sequentially:
-    python ocr_pipeline.py
-    python ocr_cleanup.py
-    python ocr_error_check.py
-    python error_redo.py
+```
+pip install google-genai Pillow python-dotenv
+```
+
+Usage — run the scripts sequentially:
+
+```
+python ocr_pipeline.py
+python ocr_cleanup.py
+python ocr_error_check.py
+python error_redo.py
+```
 
 You need an API key from Google AI Studio. Place the key in an .env file within your working directory. See the example file, .env.example. Be sure to add this file to .gitignore.
 
