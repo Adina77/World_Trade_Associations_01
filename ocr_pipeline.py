@@ -133,6 +133,27 @@ Entry structure
   This Periodicals line is NOT part of the Focus field. Stop the focus text
   before any "Periodicals" content. Do not include publication names in focus.
 
+Split entries — when an association spans two pages
+  IDs are strictly sequential. The page header shows the range ONLY for
+  entries that both start AND end on this page.
+
+  Case 1 — Incomplete LAST entry (cut off at the bottom of the page):
+    You may see an association name (and perhaps part of an address) near
+    the bottom of the last column, but the entry is cut off — no Focus
+    line and no ID number appear before the page ends.
+    → DO include it. Assign the next integer after the last complete
+      entry's ID on this page (it will not appear in the header range).
+    → Leave focus as "" if the Focus line is not visible on this page.
+
+  Case 2 — Continuation FIRST entry (cut off at the top of the page):
+    You may see what looks like a mid-entry continuation at the top of
+    the first column — an address line or a Focus line with no association
+    name above it.  The name started on the previous page.
+    → DO include it. Use the ID that appears at the end of this entry
+      (it is the first ID in this page's header range).
+    → Leave name as "" if the association name is truly not visible on
+      this page — it will be merged with the previous page's entry later.
+
 ──────────────────────────────────────
 FIELDS TO EXTRACT
 ──────────────────────────────────────
