@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 import google.genai as genai
-from google.genai import types
+# from google.genai import types  # used when THINKING_CONFIG is active
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -34,11 +34,14 @@ load_dotenv()   # Reads the .env file in the project folder (if present)
 
 API_KEY = os.environ["GOOGLE_API_KEY"]   # Set this in your .env file (see .env.example)
 
-MODEL = "gemini-3.1-flash-lite"  # Check for updates on models and pricing
+# Bulk-run model (gemini-3.1-flash-lite, thinking budget 2048 tokens):
+# MODEL = "gemini-3.1-flash-lite"
+# THINKING_CONFIG = types.GenerateContentConfig(
+#     thinking_config=types.ThinkingConfig(thinking_budget=2048)
+# )
 
-THINKING_CONFIG = types.GenerateContentConfig(
-    thinking_config=types.ThinkingConfig(thinking_budget=2048)
-)
+# Re-run model for problem pages — gemini-2.5-flash with default thinking:
+MODEL = "gemini-2.5-flash"
 
 IMAGE_DIR = Path(__file__).parent / "WorldGuideTrade_bookpages"
 
@@ -48,9 +51,9 @@ FINAL_CSV            = OUTPUT_DIR / "associations_raw.csv"
 FAILED_PAGES_FILE    = OUTPUT_DIR / "failed_pages.jsonl"   # Append-only log of failures
 FAILED_SUMMARY_FILE  = OUTPUT_DIR / "failed_pages_summary.txt"  # Human-readable, regenerated each run
 
-# Data pages only — front matter ends at image00022, indexes begin at image00478.
+# Data pages only — front matter ends at image00022, indexes begin at image00401.
 FIRST_PAGE = "image00023.jpg"
-LAST_PAGE  = "image00477.jpg"
+LAST_PAGE  = "image00400.jpg"
 
 # Seconds to wait between API calls.
 # Raise this to ~4-8 if you see rate-limit errors; lower to 0.5 if processing is slow.
@@ -186,15 +189,32 @@ def parse_response(text: str) -> list:
     return json.loads(text.strip())
 
 
+def valid_pages() -> set[str]:
+    """Return the set of page filenames that fall within the data range."""
+    all_images = sorted(p.name for p in IMAGE_DIR.glob("*.jpg"))
+    try:
+        start = all_images.index(FIRST_PAGE)
+        end   = all_images.index(LAST_PAGE) + 1
+    except ValueError:
+        return set()
+    return set(all_images[start:end])
+
+
 def build_csv():
-    """Read all checkpointed pages and write a single sorted CSV."""
+    """Read checkpointed pages within the data range and write a single sorted CSV."""
+    in_range = valid_pages()
     rows = []
+    skipped_pages = set()
     with open(CHECKPOINT_FILE, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             rec = json.loads(line)
+            if rec["page"] not in in_range:
+                if rec["entries"]:   # only warn if the out-of-range page had entries
+                    skipped_pages.add(rec["page"])
+                continue
             for entry in rec["entries"]:
                 entry.setdefault("country", "")
                 entry.setdefault("id", "")
@@ -203,6 +223,10 @@ def build_csv():
                 entry.setdefault("focus", "")
                 entry["source_page"] = rec["page"]
                 rows.append(entry)
+
+    if skipped_pages:
+        print(f"  Skipped {len(skipped_pages)} out-of-range page(s) with entries: "
+              f"{', '.join(sorted(skipped_pages))}")
 
     # Sort by the 5-digit entry ID so the CSV is in book order
     rows.sort(key=lambda r: r.get("id", "99999"))
@@ -284,7 +308,8 @@ def main():
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 img      = Image.open(img_path)
-                response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=THINKING_CONFIG)
+                # response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=THINKING_CONFIG)
+                response = client.models.generate_content(model=MODEL, contents=[PROMPT, img])
                 entries  = parse_response(response.text)
                 save_page(img_path.name, entries)
                 print(f"{len(entries)} entries")
