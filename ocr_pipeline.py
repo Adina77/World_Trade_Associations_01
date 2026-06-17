@@ -331,6 +331,13 @@ def main():
                 img      = Image.open(img_path)
                 # response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=THINKING_CONFIG)
                 response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=JSON_CONFIG)
+                if response.text is None:
+                    block_reason = "unknown"
+                    try:
+                        block_reason = str(response.prompt_feedback)
+                    except Exception:
+                        pass
+                    raise ValueError(f"safety_blocked: response.text is None — {block_reason}")
                 entries  = parse_response(response.text)
                 save_page(img_path.name, entries)
                 print(f"{len(entries)} entries")

@@ -2,47 +2,50 @@
 """
 ocr_error_check.py
 
-Validates the raw OCR output CSV for completeness after the pipeline finishes.
+Validates OCR output for completeness and flags pages to re-run.
 
-Reads associations_raw.csv, sorts entries by the 5-digit sequential ID, and
-checks that every integer in the range [min_id, max_id] is present.  Any gap
-is reported together with the source page most likely responsible, so we know
-exactly which page image to re-run through a better model.
+Prefers associations_cleaned.csv (post-cleanup); falls back to
+associations_raw.csv, then progress.jsonl.
 
-Also checks for:
-  - Duplicate IDs (same ID extracted from more than one page)
+Checks:
+  - Sequential ID completeness (gaps)
+  - Duplicate IDs — categorised as boundary dups (same name) or
+    misread IDs (different names)
   - Malformed IDs (not exactly 5 digits)
-  - Pages in the data range that were never processed
+  - Pages in the data range never processed
 
-Falls back to progress.jsonl if the CSV has not been built yet (e.g. because
-a JSON parse error on some pages prevented build_csv() from completing).
-
+Outputs ocr_output/pages_to_redo.txt: source pages ranked by issue
+count (misread-ID duplicates + bad-format IDs), ready for error_redo.py.
 """
 
 import csv
 import json
 import sys
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 
-# ── Paths (mirrors ocr_pipeline.py) ─────────────────────────────────────────
+# ── Paths ────────────────────────────────────────────────────────────────────
 OUTPUT_DIR      = Path(__file__).parent / "ocr_output"
+CLEANED_CSV     = OUTPUT_DIR / "associations_cleaned.csv"
 FINAL_CSV       = OUTPUT_DIR / "associations_raw.csv"
 CHECKPOINT_FILE = OUTPUT_DIR / "progress.jsonl"
 IMAGE_DIR       = Path(__file__).parent / "WorldGuideTrade_bookpages"
+REDO_PAGES_FILE = OUTPUT_DIR / "pages_to_redo.txt"
 
 FIRST_PAGE = "image00023.jpg"
-LAST_PAGE  = "image00477.jpg"
+LAST_PAGE  = "image00400.jpg"
 
 
 # ── Loaders ──────────────────────────────────────────────────────────────────
 
 def load_from_csv(path: Path) -> list[dict]:
     rows = []
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8", newline="") as f:
         for row in csv.DictReader(f):
             rows.append({
                 "id":          row["id"].strip(),
+                "name":        row.get("name", "").strip(),
                 "source_page": row["source_page"].strip(),
             })
     return rows
@@ -59,12 +62,15 @@ def load_from_checkpoint(path: Path) -> list[dict]:
             for entry in rec["entries"]:
                 id_val = entry.get("id", "").strip()
                 if id_val:
-                    rows.append({"id": id_val, "source_page": rec["page"]})
+                    rows.append({
+                        "id":          id_val,
+                        "name":        entry.get("name", "").strip(),
+                        "source_page": rec["page"],
+                    })
     return rows
 
 
 def pages_processed_from_checkpoint(path: Path) -> set[str]:
-    """All page filenames recorded in the checkpoint (including empty-result pages)."""
     processed = set()
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -75,7 +81,6 @@ def pages_processed_from_checkpoint(path: Path) -> set[str]:
 
 
 def pages_in_range(first: str, last: str) -> list[str]:
-    """Sorted list of image filenames within the data-page range."""
     if not IMAGE_DIR.exists():
         return []
     all_images = sorted(p.name for p in IMAGE_DIR.glob("*.jpg"))
@@ -95,14 +100,6 @@ def find_responsible_page(
     id_to_page: dict[int, str],
     page_list:  list[str],
 ) -> str:
-    """
-    Return the page(s) most likely responsible for a missing ID range.
-
-    Looks at the nearest successfully extracted IDs below and above the gap:
-    - Same page on both sides → that page missed those entries.
-    - Adjacent pages → boundary; report both.
-    - Pages in between → list the intermediate pages (likely unprocessed).
-    """
     lower_page = upper_page = None
     for offset in range(1, 100_000):
         if lower_page is None and (gap_start - offset) in id_to_page:
@@ -121,7 +118,6 @@ def find_responsible_page(
     if lower_page == upper_page:
         return lower_page
 
-    # Span multiple pages — list the pages between the neighbours
     if page_list:
         try:
             lo_idx = page_list.index(lower_page)
@@ -138,30 +134,34 @@ def find_responsible_page(
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    # 1. Choose data source
-    if FINAL_CSV.exists():
-        print(f"Source: {FINAL_CSV}\n")
+    # 1. Choose data source (prefer cleaned, then raw, then checkpoint)
+    if CLEANED_CSV.exists():
+        print(f"Source: {CLEANED_CSV.name}\n")
+        entries = load_from_csv(CLEANED_CSV)
+        source_label = "associations_cleaned.csv"
+    elif FINAL_CSV.exists():
+        print(f"Source: {FINAL_CSV.name}  (run ocr_cleanup.py for a cleaned version)\n")
         entries = load_from_csv(FINAL_CSV)
-        source_label = "CSV"
+        source_label = "associations_raw.csv"
     elif CHECKPOINT_FILE.exists():
-        print(f"CSV not found — falling back to {CHECKPOINT_FILE}\n")
+        print(f"No CSV found — falling back to {CHECKPOINT_FILE.name}\n")
         entries = load_from_checkpoint(CHECKPOINT_FILE)
-        source_label = "checkpoint JSONL"
+        source_label = "progress.jsonl"
     else:
         sys.exit(
-            "ERROR: Neither associations_raw.csv nor progress.jsonl found in ocr_output/\n"
-            "Run the pipeline first."
+            "ERROR: No data source found in ocr_output/\n"
+            "Run ocr_pipeline.py first."
         )
 
     print(f"Rows loaded: {len(entries):,}")
-
-    # 2. Sort by ID (the CSV is already sorted, but re-sort to be safe)
     entries.sort(key=lambda r: r["id"])
 
-    # 3. Validate IDs
-    id_to_page:  dict[int, str]        = {}           # int id → first source page
-    extra_pages: dict[int, list[str]]  = defaultdict(list)  # duplicates
-    bad_format:  list[dict]            = []
+    # 2. Parse and validate IDs
+    # id_to_page: first occurrence of each numeric ID → source page
+    # dup_entries: all entries (including first) for IDs that appear more than once
+    id_to_page:  dict[int, str]         = {}
+    dup_entries: dict[int, list[dict]]  = defaultdict(list)
+    bad_format:  list[dict]             = []
 
     for row in entries:
         raw = row["id"]
@@ -169,10 +169,23 @@ def main():
             bad_format.append(row)
             continue
         num = int(raw)
-        if num in id_to_page:
-            extra_pages[num].append(row["source_page"])
-        else:
+        dup_entries[num].append(row)
+        if num not in id_to_page:
             id_to_page[num] = row["source_page"]
+
+    # Separate true duplicates from singles
+    true_dups = {k: v for k, v in dup_entries.items() if len(v) > 1}
+
+    # Categorise duplicates
+    boundary_dups: list[int] = []   # same name → page-boundary overlap
+    misread_dups:  list[int] = []   # different names → model misread an ID
+
+    for num, group in true_dups.items():
+        names = {r["name"] for r in group}
+        if len(names) == 1:
+            boundary_dups.append(num)
+        else:
+            misread_dups.append(num)
 
     if not id_to_page:
         sys.exit("ERROR: No valid 5-digit IDs found — check the data source.")
@@ -194,7 +207,7 @@ def main():
                 gs = ge = m
         gaps.append((gs, ge))
 
-    # 4. Unprocessed pages
+    # 3. Unprocessed pages
     all_pages = pages_in_range(FIRST_PAGE, LAST_PAGE)
     if all_pages and CHECKPOINT_FILE.exists():
         processed_pages = pages_processed_from_checkpoint(CHECKPOINT_FILE)
@@ -203,31 +216,49 @@ def main():
         processed_pages = set()
         unprocessed = []
 
-    # ── Report ───────────────────────────────────────────────────────────────
+    # 4. Per-page issue counts (misread dups + bad-format IDs)
+    #    These are the pages worth re-scanning with a better model.
+    page_issues: dict[str, int] = defaultdict(int)
+
+    for num in misread_dups:
+        for row in true_dups[num]:
+            page_issues[row["source_page"]] += 1
+
+    for row in bad_format:
+        page_issues[row["source_page"]] += 1
+
+    ranked_pages = sorted(page_issues, key=lambda p: page_issues[p], reverse=True)
+
+    # ── Print report ─────────────────────────────────────────────────────────
     SEP  = "─" * 70
     SEP2 = "═" * 70
 
     print(SEP2)
     print("  OCR COMPLETENESS REPORT")
     print(SEP2)
-    print(f"  Source:             {source_label}")
-    print(f"  ID range in data:   {min_id:05d} – {max_id:05d}")
-    print(f"  IDs expected:       {expected_count:,}")
-    print(f"  IDs found:          {len(id_to_page):,}")
-    print(f"  Missing IDs:        {len(missing_ids):,}")
-    print(f"  Duplicate IDs:      {len(extra_pages):,}")
-    print(f"  Bad-format IDs:     {len(bad_format):,}")
+    print(f"  Source:               {source_label}")
+    print(f"  ID range in data:     {min_id:05d} – {max_id:05d}")
+    print(f"  IDs expected:         {expected_count:,}")
+    print(f"  IDs found (unique):   {len(id_to_page):,}")
+    print(f"  Missing IDs:          {len(missing_ids):,}")
+    print(f"  Duplicate IDs:        {len(true_dups):,}  "
+          f"({len(boundary_dups)} boundary, {len(misread_dups)} misread)")
+    print(f"  Bad-format IDs:       {len(bad_format):,}")
     if all_pages:
-        print(f"  Pages in range:     {len(all_pages):,}")
-        print(f"  Pages processed:    {len(processed_pages):,}")
-        print(f"  Pages unprocessed:  {len(unprocessed):,}")
+        print(f"  Pages in range:       {len(all_pages):,}")
+        print(f"  Pages processed:      {len(processed_pages):,}")
+        print(f"  Pages unprocessed:    {len(unprocessed):,}")
+    print(f"  Pages with issues:    {len(page_issues):,}  "
+          f"(duplicates + bad-format — candidates for re-scan)")
     print(SEP2)
     print()
 
-    any_issue = gaps or unprocessed or extra_pages or bad_format
+    any_issue = gaps or unprocessed or true_dups or bad_format
 
     if not any_issue:
         print("✓  All checks passed — every ID is present and sequential, no duplicates.")
+        if REDO_PAGES_FILE.exists():
+            REDO_PAGES_FILE.unlink()
         return
 
     # ── Missing ID gaps ───────────────────────────────────────────────────────
@@ -250,42 +281,66 @@ def main():
             print(f"  {p}")
         print()
 
-    # ── Duplicate IDs ─────────────────────────────────────────────────────────
-    if extra_pages:
-        print(f"DUPLICATE IDs  ({len(extra_pages)} ID(s) extracted from multiple pages)")
+    # ── Boundary duplicates ───────────────────────────────────────────────────
+    if boundary_dups:
+        print(f"BOUNDARY DUPLICATES  ({len(boundary_dups)} — same name, different page)")
         print(SEP)
-        for num in sorted(extra_pages):
-            pages = [id_to_page[num]] + extra_pages[num]
+        print("  These should have been removed by ocr_cleanup.py.")
+        print("  If present, re-run ocr_cleanup.py.")
+        for num in sorted(boundary_dups)[:10]:
+            pages = [r["source_page"] for r in true_dups[num]]
             print(f"  {num:05d}  →  {', '.join(pages)}")
+        if len(boundary_dups) > 10:
+            print(f"  … and {len(boundary_dups) - 10} more")
+        print()
+
+    # ── Misread-ID duplicates ─────────────────────────────────────────────────
+    if misread_dups:
+        print(f"MISREAD-ID DUPLICATES  ({len(misread_dups)} — different names sharing the same ID)")
+        print(SEP)
+        print("  One entry has a correct ID; the other has a misread ID.")
+        print("  Re-scanning the source pages with a better model should fix these.")
+        print()
+        for num in sorted(misread_dups):
+            group = true_dups[num]
+            print(f"  ID {num:05d}:")
+            for r in group:
+                print(f"    [{r['source_page']}]  {r['name'][:60]}")
         print()
 
     # ── Bad-format IDs ────────────────────────────────────────────────────────
     if bad_format:
-        shown = bad_format[:20]
         print(f"BAD-FORMAT IDs  ({len(bad_format)} row(s) where 'id' is not exactly 5 digits)")
         print(SEP)
-        for row in shown:
-            print(f"  id={row['id']!r:14s}  source_page={row['source_page']}")
+        for row in bad_format[:20]:
+            print(f"  id={row['id']!r:14s}  [{row['source_page']}]  {row['name'][:50]}")
         if len(bad_format) > 20:
             print(f"  … and {len(bad_format) - 20} more")
         print()
 
-    # ── Consolidated re-run list ───────────────────────────────────────────────
-    rerun_pages: set[str] = set(unprocessed)
-    for gs, ge in gaps:
-        page_str = find_responsible_page(gs, ge, id_to_page, all_pages)
-        for part in page_str.replace(" … ", "  /  ").split("  /  "):
-            part = part.strip()
-            if part and part != "unknown" and not part.startswith("("):
-                rerun_pages.add(part)
-
-    if rerun_pages:
-        print("PAGES TO RE-RUN  (consolidated)")
+    # ── Pages ranked by issue count ───────────────────────────────────────────
+    if ranked_pages:
+        print(f"PAGES TO RE-SCAN  (ranked by issue count — misread dups + bad-format IDs)")
         print(SEP)
-        for p in sorted(rerun_pages):
-            print(f"  {p}")
+        print(f"  {'Page':<25}  Issues")
+        print(f"  {'─'*25}  {'─'*6}")
+        for p in ranked_pages:
+            print(f"  {p:<25}  {page_issues[p]:>6}")
         print()
-        print(f"Total pages to re-run: {len(rerun_pages)}")
+
+    # ── Write pages_to_redo.txt ───────────────────────────────────────────────
+    with open(REDO_PAGES_FILE, "w", encoding="utf-8") as f:
+        f.write(f"# pages_to_redo.txt — generated by ocr_error_check.py on {date.today()}\n")
+        f.write(f"# Pages ranked by issue count (misread-ID duplicates + bad-format IDs).\n")
+        f.write(f"# Edit this file to select which pages to re-scan, then run error_redo.py.\n")
+        f.write(f"# Lines starting with # are ignored.  Total pages: {len(ranked_pages)}\n")
+        f.write("#\n")
+        f.write(f"# {'Page':<25}  Issues\n")
+        for p in ranked_pages:
+            f.write(f"  {p:<25}  # {page_issues[p]} issues\n")
+
+    print(f"Wrote {len(ranked_pages)} pages → {REDO_PAGES_FILE.name}")
+    print("Edit that file to choose which pages to re-scan, then run error_redo.py.")
 
 
 if __name__ == "__main__":
