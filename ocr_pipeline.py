@@ -43,22 +43,29 @@ API_KEY = os.environ["GOOGLE_API_KEY"]
 # )
 
 # Re-run with better model for problem pages
-MODEL = "gemini-3.5-flash"
-# MODEL = "gemini-2.5-pro"
+# MODEL = "gemini-3.5-flash"
+MODEL = "gemini-2.5-pro"
 
-# Force JSON output and disable safety filters.
-# Needed because legitimate trade association entries (e.g. "Armament Engineers",
-# focus field "Drugs" for a pharmaceutical body) otherwise trip the weapons /
-# substances filters and return a silent None response.
+# Primary config: force JSON output + disable safety filters.
+# Needed because legitimate entries (e.g. "Armament Engineers", focus "Drugs"
+# for a pharmaceutical body) trip the weapons/substances filters.
+_SAFETY_OFF = [
+    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",       threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+]
+
 JSON_CONFIG = types.GenerateContentConfig(
     response_mime_type="application/json",
-    safety_settings=[
-        types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",       threshold="BLOCK_NONE"),
-        types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_NONE"),
-        types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-        types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
-    ]
+    safety_settings=_SAFETY_OFF,
 )
+
+# Fallback config: safety off but NO forced JSON mime type.
+# Used when JSON_CONFIG returns response.text=None (the JSON-mode enforcement
+# and the safety refusal interact and produce a silent null response on some pages).
+# The regex parser in parse_response() handles the output instead.
+FALLBACK_CONFIG = types.GenerateContentConfig(safety_settings=_SAFETY_OFF)
 
 IMAGE_DIR = Path(__file__).parent / "WorldGuideTrade_bookpages"
 
@@ -332,12 +339,17 @@ def main():
                 # response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=THINKING_CONFIG)
                 response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=JSON_CONFIG)
                 if response.text is None:
+                    # JSON mode + safety refusal can interact to produce a silent null.
+                    # Retry once without the JSON mime-type enforcement.
+                    print("JSON_CONFIG returned None — retrying with FALLBACK_CONFIG ...", end="  ", flush=True)
+                    response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=FALLBACK_CONFIG)
+                if response.text is None:
                     block_reason = "unknown"
                     try:
                         block_reason = str(response.prompt_feedback)
                     except Exception:
                         pass
-                    raise ValueError(f"safety_blocked: response.text is None — {block_reason}")
+                    raise ValueError(f"safety_blocked: response.text is None after fallback — {block_reason}")
                 entries  = parse_response(response.text)
                 save_page(img_path.name, entries)
                 print(f"{len(entries)} entries")
