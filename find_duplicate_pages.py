@@ -6,12 +6,12 @@ Scan a set of image files looking ONLY at the running page header
 (book page number + association ID range) to identify duplicate scans —
 two image files that cover the same printed book page.
 
-By default scans the pages listed in ocr_output/pages_to_redo.txt
+By default, scans the pages listed in ocr_output/pages_to_redo.txt
 (both copies of any duplicate page should appear there, because the
 inconsistent OCR results show up as misread-ID duplicates in the error check).
 
-Pass --all to scan every image in the FIRST_PAGE–LAST_PAGE range instead
-(~378 API calls; only needed if a duplicate is not on the redo list).
+Pass --all to scan every image in the FIRST_PAGE-LAST_PAGE range instead
+(~378 API calls; only needed if not all duplicates are on the redo list).
 
 Output:  ocr_output/duplicate_pages.txt
   Lists the later-numbered copy of each duplicate pair — these are the files
@@ -54,7 +54,7 @@ MODEL = "gemini-3.1-flash-lite"
 
 # Rate between API calls (seconds).  Flash-lite has a generous free quota;
 # raise to 2–4 if you see 429 rate-limit errors.
-CALL_DELAY = 0.5
+CALL_DELAY = 4
 
 # Height (pixels) of the header strip cropped from each image before sending.
 # The top 250 px captures the running header on a ~2800×3900 scan.
