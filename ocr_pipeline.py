@@ -107,8 +107,10 @@ Country identification — TWO sources, use both
      the current country, in a format like:
          "France: Syndicat   05273 — 05460"
          "05461 —   France: Syndicat"
-     The country name is the word(s) before the colon. Use this as the default
-     country for all entries on the page.
+     The country name is ONLY the text before the colon. The word(s) after the
+     colon are the beginning of an association name — do NOT include the colon
+     or anything after it in the country field.
+     Use this country name as the default for all entries on the page.
 
   2. Section headers in the body: Country names also appear as bold headings
      within the column text when a new country section begins mid-page.

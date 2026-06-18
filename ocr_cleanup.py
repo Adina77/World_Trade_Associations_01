@@ -25,6 +25,19 @@ Step 2 — Merge split-entry duplicates
 
   Entries with the same ID but two DIFFERENT non-empty names are NOT merged —
   those are misread IDs and need manual review (ocr_error_check.py reports them).
+
+Step 3 — Clean country field
+  The page heading format is "Belgium: Syndicat 05273 — 05460". The model
+  should extract only the text before the colon as the country name, but
+  sometimes includes the word(s) after the colon (the start of an association
+  name), producing values like "Belgium: European" or "U.S.A.: Wisconsin".
+
+  Fix: strip everything from the first colon onward.  All legitimate country
+  names in this dataset use commas (e.g. "Korea, Republic") but not colons,
+  so the colon is a reliable artifact signal.
+
+  One entry (id 23393) has "Wisconsin" as the country — the model misread the
+  heading entirely.  This is corrected to "U.S.A." as a hardcoded override.
 """
 
 import csv
@@ -38,8 +51,21 @@ OUTPUT_CSV = OUTPUT_DIR / "associations_cleaned.csv"
 FIELDNAMES = ["id", "country", "name", "address", "focus", "source_page"]
 
 
+COUNTRY_OVERRIDES = {
+    "Wisconsin": "U.S.A.",   # id 23393: model misread the page heading entirely
+}
+
+
 def fix_newlines(value: str) -> str:
     return value.replace('\r\n', ' ').replace('\r', ' ').replace('\n', ' ')
+
+
+def clean_country(value: str) -> str:
+    """Strip colon artifacts from heading bleed-through, e.g. 'Belgium: European' → 'Belgium'."""
+    value = COUNTRY_OVERRIDES.get(value, value)
+    if ':' in value:
+        value = value.split(':')[0].strip()
+    return value
 
 
 def merge_group(group: list[dict]) -> dict:
@@ -156,6 +182,22 @@ def main():
               f"see ocr_error_check.py for details")
     print()
 
+    # ── Step 3: clean country field ───────────────────────────────────────────
+    country_fixes: list[tuple[str, str, str]] = []   # (id, old_value, new_value)
+    for row in kept:
+        original = row['country']
+        cleaned  = clean_country(original)
+        if cleaned != original:
+            country_fixes.append((row['id'], original, cleaned))
+            row['country'] = cleaned
+
+    print(f"Step 3 — Country field cleaned: {len(country_fixes)} row(s) fixed")
+    for rid, old, new in country_fixes[:20]:
+        print(f"  id={rid}  {old!r}  →  {new!r}")
+    if len(country_fixes) > 20:
+        print(f"  ... and {len(country_fixes) - 20} more")
+    print()
+
     # ── Write output ─────────────────────────────────────────────────────────
     with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore")
@@ -169,6 +211,7 @@ def main():
     print(f"  Input rows:               {len(rows):>7,}")
     print(f"  Newline fixes:            {len(newline_fixes):>7,}")
     print(f"  Split-entry rows merged:  {merged_count:>7,}")
+    print(f"  Country field fixes:      {len(country_fixes):>7,}")
     print(f"  Output rows:              {len(kept):>7,}")
     print(f"  Saved → {OUTPUT_CSV}")
 
