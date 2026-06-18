@@ -1,0 +1,4 @@
+Failed pages — 1 not yet successfully processed
+======================================================================
+
+image00250.jpg  [api_error]  safety_blocked: response.text is None after fallback — None

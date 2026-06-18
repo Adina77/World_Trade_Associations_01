@@ -9,15 +9,13 @@ Workflow
 ────────
 1. Read the pages to re-process from ocr_output/pages_to_redo.txt
    (generated and ranked by ocr_error_check.py).
-   Edit that file first — remove pages you do not want to re-scan, or
-   reduce it to just the top N highest-issue pages.
 
 2. Remove those pages from progress.jsonl so the pipeline treats them as
    unprocessed.
 
 3. Run ocr_pipeline.py  →  OCR only the removed pages; rebuild associations_raw.csv.
 
-4. Run ocr_cleanup.py   →  Fix newlines, remove boundary duplicates;
+4. Run ocr_cleanup.py   →  Fix newlines, merge split entries;
                             produce associations_cleaned.csv.
 
 5. Run ocr_error_check.py  →  Report remaining issues and refresh pages_to_redo.txt.
@@ -26,12 +24,18 @@ Repeat as needed, each time working on the highest-issue pages first.
 
 Usage
 ─────
-  1. Run ocr_error_check.py to generate pages_to_redo.txt.
-  2. Edit pages_to_redo.txt — keep only the pages you want to redo this round.
-  3. python error_redo.py
+  python error_redo.py                  # process ALL pages listed in pages_to_redo.txt
+  python error_redo.py --top 5          # process only the 5 highest-issue pages
+  python error_redo.py --min-issues 20  # process only pages with ≥ 20 total issues
+  python error_redo.py --top 10 --min-issues 5   # both filters applied
+
+Selecting pages manually (original workflow)
+  Edit pages_to_redo.txt to keep only the lines you want, then run without flags.
 """
 
+import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,8 +50,12 @@ REDO_PAGES_FILE = OUTPUT_DIR / "pages_to_redo.txt"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def load_redo_pages() -> list[str]:
-    """Read page names from pages_to_redo.txt, skipping comment lines."""
+def load_redo_pages() -> list[tuple[str, int]]:
+    """
+    Read pages from pages_to_redo.txt.
+    Returns a list of (filename, issue_count) pairs in file order (highest first).
+    issue_count is 0 if the line has no parseable count.
+    """
     if not REDO_PAGES_FILE.exists():
         sys.exit(
             f"ERROR: {REDO_PAGES_FILE.name} not found.\n"
@@ -59,10 +67,14 @@ def load_redo_pages() -> list[str]:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            # Each data line is "  image000XX.jpg  # N issues" — take first token
-            page = line.split()[0]
-            if page.endswith(".jpg"):
-                pages.append(page)
+            tokens = line.split()
+            if not tokens or not tokens[0].endswith(".jpg"):
+                continue
+            filename = tokens[0]
+            # Parse issue count from comment: "# 156 issues  [...]"
+            m = re.search(r"#\s*(\d+)\s+issues", line)
+            count = int(m.group(1)) if m else 0
+            pages.append((filename, count))
     return pages
 
 
@@ -105,31 +117,72 @@ def remove_from_failed_log(pages: set[str]):
             f.write(line + "\n")
 
 
-def run_script(script_name: str, label: str) -> int:
+def run_script(script_name: str, label: str, extra_args: list[str] | None = None) -> int:
     """Run a sibling Python script and return its exit code."""
     script = BASE_DIR / script_name
+    cmd    = [sys.executable, str(script)]
+    if extra_args:
+        cmd.extend(extra_args)
     print(f"\n{'─'*60}")
     print(f"  Running {label} ...")
     print(f"{'─'*60}")
-    result = subprocess.run([sys.executable, str(script)])
+    result = subprocess.run(cmd)
     return result.returncode
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    pages = load_redo_pages()
-    if not pages:
+    parser = argparse.ArgumentParser(
+        description="Re-process high-issue pages and rebuild the pipeline output."
+    )
+    parser.add_argument(
+        "--top", type=int, metavar="N",
+        help="Process only the top N highest-issue pages from pages_to_redo.txt"
+    )
+    parser.add_argument(
+        "--min-issues", type=int, metavar="N", dest="min_issues",
+        help="Process only pages with at least N total issues"
+    )
+    args = parser.parse_args()
+
+    all_entries = load_redo_pages()   # list of (filename, issue_count)
+    if not all_entries:
         sys.exit("No pages found in pages_to_redo.txt — nothing to do.")
 
+    # Apply --min-issues filter first (preserves ranking order)
+    if args.min_issues is not None:
+        filtered = [(p, n) for p, n in all_entries if n >= args.min_issues]
+    else:
+        filtered = list(all_entries)
+
+    # Apply --top N slice
+    if args.top is not None:
+        filtered = filtered[: args.top]
+
+    if not filtered:
+        sys.exit(
+            f"No pages passed the filter "
+            f"(total in file: {len(all_entries)}, "
+            f"--top={args.top}, --min-issues={args.min_issues})."
+        )
+
+    pages   = [p for p, _ in filtered]
     page_set = set(pages)
     SEP2 = "═" * 60
     print(SEP2)
     print("  ERROR REDO")
     print(SEP2)
+    if args.top or args.min_issues:
+        filter_desc = []
+        if args.top:        filter_desc.append(f"--top {args.top}")
+        if args.min_issues: filter_desc.append(f"--min-issues {args.min_issues}")
+        print(f"  Filter:              {', '.join(filter_desc)}")
+        print(f"  Pages in file:       {len(all_entries)}")
     print(f"  Pages to re-process: {len(pages)}")
-    for p in pages:
-        print(f"    {p}")
+    for p, n in filtered:
+        count_str = f"  ({n} issues)" if n else ""
+        print(f"    {p}{count_str}")
     print()
 
     # Step 1 — remove from checkpoint so pipeline picks them up
@@ -138,8 +191,8 @@ def main():
     print(f"Removed {removed} checkpoint entry/entries for {len(page_set)} page(s).")
     print("The pipeline will re-process only these pages.")
 
-    # Step 2 — re-run OCR pipeline
-    rc = run_script("ocr_pipeline.py", "OCR pipeline")
+    # Step 2 — re-run OCR pipeline (only the selected pages)
+    rc = run_script("ocr_pipeline.py", "OCR pipeline", extra_args=["--pages"] + pages)
     if rc != 0:
         print(f"\nWARNING: ocr_pipeline.py exited with code {rc}.")
         print("Some pages may not have been processed. Check failed_pages.jsonl.")

@@ -29,12 +29,20 @@ from pathlib import Path
 OUTPUT_DIR      = Path(__file__).parent / "ocr_output"
 CLEANED_CSV     = OUTPUT_DIR / "associations_cleaned.csv"
 FINAL_CSV       = OUTPUT_DIR / "associations_raw.csv"
-CHECKPOINT_FILE = OUTPUT_DIR / "progress.jsonl"
-IMAGE_DIR       = Path(__file__).parent / "WorldGuideTrade_bookpages"
-REDO_PAGES_FILE = OUTPUT_DIR / "pages_to_redo.txt"
+CHECKPOINT_FILE   = OUTPUT_DIR / "progress.jsonl"
+FAILED_PAGES_FILE = OUTPUT_DIR / "failed_pages.jsonl"
+IMAGE_DIR         = Path(__file__).parent / "WorldGuideTrade_bookpages"
+REDO_PAGES_FILE   = OUTPUT_DIR / "pages_to_redo.txt"
 
 FIRST_PAGE = "image00023.jpg"
 LAST_PAGE  = "image00400.jpg"
+
+# Pages that border known-missing book scans and cannot be improved by re-scanning.
+# Add image filenames here to prevent them from appearing in pages_to_redo.txt.
+EXCLUDE_FROM_REDO: set[str] = {
+    "image00207.jpg",   # borders book pages 188–189, which were never photographed
+    "image00208.jpg",   # borders book pages 188–189, which were never photographed
+}
 
 
 # ── Loaders ──────────────────────────────────────────────────────────────────
@@ -264,11 +272,26 @@ def main():
         processed_pages = set()
         unprocessed = []
 
-    # 4. Per-page issue counts: missing IDs + misread dups + bad-format IDs
+    # 3b. Pages that failed with API/safety errors and are still unprocessed.
+    #     Different from "never tried" pages — a better model may get past a safety
+    #     block, so these belong in pages_to_redo.txt for error_redo.py.
+    still_failed: set[str] = set()
+    if FAILED_PAGES_FILE.exists():
+        latest_failures: dict[str, dict] = {}
+        with open(FAILED_PAGES_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    rec = json.loads(line)
+                    latest_failures[rec["page"]] = rec
+        still_failed = {p for p in latest_failures if p not in processed_pages}
+
+    # 4. Per-page issue counts: missing IDs + misread dups + bad-format IDs + API failures
     #    Track each type separately so the ranked list can show a breakdown.
-    page_gap_count: dict[str, int] = defaultdict(int)  # missing IDs attributed here
-    page_dup_count: dict[str, int] = defaultdict(int)  # misread-ID duplicate rows
-    page_bad_count: dict[str, int] = defaultdict(int)  # bad-format ID rows
+    page_gap_count:    dict[str, int] = defaultdict(int)  # missing IDs attributed here
+    page_dup_count:    dict[str, int] = defaultdict(int)  # misread-ID duplicate rows
+    page_bad_count:    dict[str, int] = defaultdict(int)  # bad-format ID rows
+    page_failed_count: dict[str, int] = defaultdict(int)  # API/safety failures, unprocessed
 
     for gs, ge in gaps:
         gap_size = ge - gs + 1
@@ -282,13 +305,23 @@ def main():
     for row in bad_format:
         page_bad_count[row["source_page"]] += 1
 
-    all_issue_pages = set(page_gap_count) | set(page_dup_count) | set(page_bad_count)
+    for page in still_failed:
+        page_failed_count[page] = 1   # flag only — count doesn't reflect entry quantity
+
+    all_issue_pages = (set(page_gap_count) | set(page_dup_count)
+                       | set(page_bad_count) | set(page_failed_count))
     page_issues: dict[str, int] = {
-        p: page_gap_count[p] + page_dup_count[p] + page_bad_count[p]
+        p: page_gap_count[p] + page_dup_count[p] + page_bad_count[p] + page_failed_count[p]
         for p in all_issue_pages
     }
 
-    ranked_pages = sorted(page_issues, key=lambda p: page_issues[p], reverse=True)
+    ranked_pages = sorted(
+        (p for p in page_issues
+         if p not in EXCLUDE_FROM_REDO
+         and (p in processed_pages or p in still_failed)),  # failed pages need error_redo, not pipeline
+        key=lambda p: page_issues[p],
+        reverse=True,
+    )
 
     # ── Print report ─────────────────────────────────────────────────────────
     SEP  = "─" * 70
@@ -309,12 +342,14 @@ def main():
         print(f"  Pages in range:       {len(all_pages):,}")
         print(f"  Pages processed:      {len(processed_pages):,}")
         print(f"  Pages unprocessed:    {len(unprocessed):,}")
+        if still_failed:
+            print(f"  Pages API-failed:     {len(still_failed):,}  (in unprocessed; need error_redo.py)")
     print(f"  Pages with issues:    {len(page_issues):,}  "
-          f"(missing IDs + duplicates + bad-format — candidates for re-scan)")
+          f"(missing IDs + duplicates + bad-format + api-failed — candidates for re-scan)")
     print(SEP2)
     print()
 
-    any_issue = gaps or unprocessed or true_dups or bad_format
+    any_issue = gaps or unprocessed or still_failed or true_dups or bad_format
 
     if not any_issue:
         print("✓  All checks passed — every ID is present and sequential, no duplicates.")
@@ -381,31 +416,33 @@ def main():
 
     # ── Pages ranked by issue count ───────────────────────────────────────────
     if ranked_pages:
-        print(f"PAGES TO RE-SCAN  (ranked by total issue count — missing IDs + dups + bad-format)")
+        print(f"PAGES TO RE-SCAN  (ranked by total issue count — missing IDs + dups + bad-format + failed)")
         print(SEP)
         print(f"  {'Page':<25}  {'Total':>5}  Breakdown")
         print(f"  {'─'*25}  {'─'*5}  {'─'*30}")
         for p in ranked_pages:
             parts = []
-            if page_gap_count[p]: parts.append(f"{page_gap_count[p]} missing")
-            if page_dup_count[p]: parts.append(f"{page_dup_count[p]} dups")
-            if page_bad_count[p]: parts.append(f"{page_bad_count[p]} bad-format")
+            if page_gap_count[p]:    parts.append(f"{page_gap_count[p]} missing")
+            if page_dup_count[p]:    parts.append(f"{page_dup_count[p]} dups")
+            if page_bad_count[p]:    parts.append(f"{page_bad_count[p]} bad-format")
+            if page_failed_count[p]: parts.append("api-failed")
             print(f"  {p:<25}  {page_issues[p]:>5}  {', '.join(parts)}")
         print()
 
     # ── Write pages_to_redo.txt ───────────────────────────────────────────────
     with open(REDO_PAGES_FILE, "w", encoding="utf-8") as f:
         f.write(f"# pages_to_redo.txt — generated by ocr_error_check.py on {date.today()}\n")
-        f.write(f"# Pages ranked by total issue count (missing IDs + misread dups + bad-format).\n")
+        f.write(f"# Pages ranked by total issue count (missing IDs + misread dups + bad-format + api-failed).\n")
         f.write(f"# Edit this file to select which pages to re-scan, then run error_redo.py.\n")
         f.write(f"# Lines starting with # are ignored.  Total pages: {len(ranked_pages)}\n")
         f.write("#\n")
         f.write(f"# {'Page':<25}  {'Total':>5}  Breakdown\n")
         for p in ranked_pages:
             parts = []
-            if page_gap_count[p]: parts.append(f"{page_gap_count[p]} missing")
-            if page_dup_count[p]: parts.append(f"{page_dup_count[p]} dups")
-            if page_bad_count[p]: parts.append(f"{page_bad_count[p]} bad-format")
+            if page_gap_count[p]:    parts.append(f"{page_gap_count[p]} missing")
+            if page_dup_count[p]:    parts.append(f"{page_dup_count[p]} dups")
+            if page_bad_count[p]:    parts.append(f"{page_bad_count[p]} bad-format")
+            if page_failed_count[p]: parts.append("api-failed")
             f.write(f"  {p:<25}  # {page_issues[p]:>4} issues  [{', '.join(parts)}]\n")
 
     print(f"Wrote {len(ranked_pages)} pages → {REDO_PAGES_FILE.name}")

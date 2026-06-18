@@ -15,6 +15,7 @@ Progress is saved after every page, so the script can be safely interrupted
 and restarted. Pages already processed are skipped automatically.
 """
 
+import argparse
 import csv
 import json
 import os
@@ -243,7 +244,8 @@ def is_transient_error(e: Exception) -> bool:
     """Return True for server-side errors that are worth retrying."""
     msg = str(e).lower()
     return any(token in msg for token in ("503", "500", "502", "504", "429",
-                                          "unavailable", "overloaded", "quota"))
+                                          "unavailable", "overloaded", "quota",
+                                          "safety_blocked"))
 
 
 def parse_response(text: str) -> list:
@@ -360,6 +362,13 @@ def build_failed_summary():
 
 
 def main():
+    parser = argparse.ArgumentParser(description="OCR pipeline for World Guide to Trade Associations.")
+    parser.add_argument(
+        "--pages", nargs="+", metavar="PAGE",
+        help="Process only these specific image filenames (used by error_redo.py)"
+    )
+    args = parser.parse_args()
+
     if not API_KEY:
         print("ERROR: GOOGLE_API_KEY not found. Create a .env file containing:\n  GOOGLE_API_KEY=your_key_here")
         return
@@ -382,7 +391,17 @@ def main():
     images = all_images[start:end]
 
     done = load_done()
-    todo = [p for p in images if p.name not in done]
+
+    if args.pages:
+        # Targeted mode: process only the explicitly requested pages
+        requested = set(args.pages)
+        todo = [p for p in images if p.name in requested]
+        not_found = requested - {p.name for p in todo}
+        if not_found:
+            print(f"WARNING: {len(not_found)} requested page(s) not found in image directory: "
+                  f"{', '.join(sorted(not_found))}")
+    else:
+        todo = [p for p in images if p.name not in done]
 
     print(f"Pages found:       {len(images):>5}")
     print(f"Already processed: {len(done):>5}")
@@ -438,7 +457,15 @@ def main():
             time.sleep(DELAY)
 
     print()
-    print("All pages processed. Building final CSV ...")
+    if args.pages:
+        remaining = valid_pages() - load_done()
+        if remaining:
+            print(f"WARNING: {len(remaining)} page(s) still unprocessed in the data range — "
+                  f"skipping CSV rebuild to avoid overwriting with incomplete data.")
+            print("Run ocr_pipeline.py without --pages to process all remaining pages first.")
+            print("Done.")
+            return
+    print("Building final CSV ...")
     build_csv()
     build_failed_summary()
     print("Done.")

@@ -1,0 +1,14 @@
+{"page": "image00202.jpg", "error_type": "api_error", "error": "'NoneType' object has no attribute 'strip'"}
+{"page": "image00251.jpg", "error_type": "api_error", "error": "'NoneType' object has no attribute 'strip'"}
+{"page": "image00202.jpg", "error_type": "api_error", "error": "'NoneType' object has no attribute 'strip'"}
+{"page": "image00251.jpg", "error_type": "api_error", "error": "'NoneType' object has no attribute 'strip'"}
+{"page": "image00202.jpg", "error_type": "api_error", "error": "'NoneType' object has no attribute 'strip'"}
+{"page": "image00251.jpg", "error_type": "api_error", "error": "'NoneType' object has no attribute 'strip'"}
+{"page": "image00202.jpg", "error_type": "api_error", "error": "503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}"}
+{"page": "image00202.jpg", "error_type": "api_error", "error": "404 NOT_FOUND. {'error': {'code': 404, 'message': 'models/gemini-3.1-pro is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods.', 'status': 'NOT_FOUND'}}"}
+{"page": "image00251.jpg", "error_type": "api_error", "error": "404 NOT_FOUND. {'error': {'code': 404, 'message': 'models/gemini-3.1-pro is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods.', 'status': 'NOT_FOUND'}}"}
+{"page": "image00251.jpg", "error_type": "api_error", "error": "'NoneType' object has no attribute 'strip'"}
+{"page": "image00251.jpg", "error_type": "api_error", "error": "'NoneType' object has no attribute 'strip'"}
+{"page": "image00251.jpg", "error_type": "api_error", "error": "503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}"}
+{"page": "image00251.jpg", "error_type": "api_error", "error": "'NoneType' object has no attribute 'strip'"}
+{"page": "image00251.jpg", "error_type": "api_error", "error": "safety_blocked: response.text is None — None"}
