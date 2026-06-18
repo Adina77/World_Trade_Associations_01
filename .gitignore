@@ -4,8 +4,8 @@
 # Script input
 WorldGuideTrade_bookpages/
 
-# Script output -- keep for now
-# ocr_output/
+# Script output
+ocr_output/
 
 # Python
 __pycache__/
