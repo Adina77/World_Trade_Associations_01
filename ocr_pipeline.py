@@ -124,8 +124,9 @@ Country identification — TWO sources, use both
 Entry structure
   Each entry ends with a 5-digit sequential ID number (e.g. 06012, 15334)
   at the right edge of the column, typically preceded by dots (.....) or spaces.
-  This is a unique identification number that is assigned to a single association.
-  It must fall within the range that is shown in the header.
+  This is a unique identification number that is assigned to a SINGLE association.
+  It must fall within the range that is shown in the header and must not be assinged
+  to more than one association.
 
   A typical entry looks like:
       <Association Name>              ← one to three lines, sometimes bilingual
@@ -142,11 +143,13 @@ Entry structure
   This Periodicals line is NOT part of the Focus field. Stop the focus text
   before any "Periodicals" content. Do not include publication names in focus.
 
-Association name changes: occasionally an entry is just an indication that an 
+Association name changes: 
+Occasionally an entry is just an indication that an 
 association has changed its name, and the actual entry is under the new name 
 elsewhere. This can be detected because the entry consists of two association names
 separated by a right-pointing arrow. There is no ID number for these cases and 
-they should be ignored.
+they should be ignored. They must not be assigned an ID number and must not be
+extracted into the output file.
 
 Split entries — what to do when an association spans two pages:
   IDs are strictly sequential. The page header shows the range ONLY for

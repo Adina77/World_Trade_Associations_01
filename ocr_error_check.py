@@ -131,6 +131,54 @@ def find_responsible_page(
     return f"{lower_page}  /  {upper_page}"
 
 
+def find_responsible_pages(
+    gap_start:       int,
+    gap_end:         int,
+    id_to_page:      dict[int, str],
+    page_list:       list[str],
+    processed_pages: set[str],
+) -> list[str]:
+    """
+    Return the page filename(s) most likely responsible for a missing-ID gap,
+    as a list suitable for issue counting.
+
+    When the gap falls between two different pages, unprocessed pages inside
+    the span are returned (they're the clear cause).  If all pages in the span
+    were processed, both neighboring pages are returned because we can't tell
+    which one missed the entries.
+    """
+    lower_page = upper_page = None
+    for offset in range(1, 100_000):
+        if lower_page is None and (gap_start - offset) in id_to_page:
+            lower_page = id_to_page[gap_start - offset]
+        if upper_page is None and (gap_end + offset) in id_to_page:
+            upper_page = id_to_page[gap_end + offset]
+        if lower_page is not None and upper_page is not None:
+            break
+
+    if lower_page is None and upper_page is None:
+        return []
+    if lower_page is None:
+        return [upper_page]
+    if upper_page is None:
+        return [lower_page]
+    if lower_page == upper_page:
+        return [lower_page]
+
+    if page_list:
+        try:
+            lo_idx = page_list.index(lower_page)
+            hi_idx = page_list.index(upper_page)
+            span   = page_list[lo_idx : hi_idx + 1]
+            unprocessed_in_span = [p for p in span if p not in processed_pages]
+            if unprocessed_in_span:
+                return unprocessed_in_span   # unprocessed pages caused the gap
+        except ValueError:
+            pass
+    # All pages in span were processed — blame both neighbors
+    return [lower_page, upper_page]
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -216,16 +264,29 @@ def main():
         processed_pages = set()
         unprocessed = []
 
-    # 4. Per-page issue counts (misread dups + bad-format IDs)
-    #    These are the pages worth re-scanning with a better model.
-    page_issues: dict[str, int] = defaultdict(int)
+    # 4. Per-page issue counts: missing IDs + misread dups + bad-format IDs
+    #    Track each type separately so the ranked list can show a breakdown.
+    page_gap_count: dict[str, int] = defaultdict(int)  # missing IDs attributed here
+    page_dup_count: dict[str, int] = defaultdict(int)  # misread-ID duplicate rows
+    page_bad_count: dict[str, int] = defaultdict(int)  # bad-format ID rows
+
+    for gs, ge in gaps:
+        gap_size = ge - gs + 1
+        for page in find_responsible_pages(gs, ge, id_to_page, all_pages, processed_pages):
+            page_gap_count[page] += gap_size
 
     for num in misread_dups:
         for row in true_dups[num]:
-            page_issues[row["source_page"]] += 1
+            page_dup_count[row["source_page"]] += 1
 
     for row in bad_format:
-        page_issues[row["source_page"]] += 1
+        page_bad_count[row["source_page"]] += 1
+
+    all_issue_pages = set(page_gap_count) | set(page_dup_count) | set(page_bad_count)
+    page_issues: dict[str, int] = {
+        p: page_gap_count[p] + page_dup_count[p] + page_bad_count[p]
+        for p in all_issue_pages
+    }
 
     ranked_pages = sorted(page_issues, key=lambda p: page_issues[p], reverse=True)
 
@@ -249,7 +310,7 @@ def main():
         print(f"  Pages processed:      {len(processed_pages):,}")
         print(f"  Pages unprocessed:    {len(unprocessed):,}")
     print(f"  Pages with issues:    {len(page_issues):,}  "
-          f"(duplicates + bad-format — candidates for re-scan)")
+          f"(missing IDs + duplicates + bad-format — candidates for re-scan)")
     print(SEP2)
     print()
 
@@ -320,24 +381,32 @@ def main():
 
     # ── Pages ranked by issue count ───────────────────────────────────────────
     if ranked_pages:
-        print(f"PAGES TO RE-SCAN  (ranked by issue count — misread dups + bad-format IDs)")
+        print(f"PAGES TO RE-SCAN  (ranked by total issue count — missing IDs + dups + bad-format)")
         print(SEP)
-        print(f"  {'Page':<25}  Issues")
-        print(f"  {'─'*25}  {'─'*6}")
+        print(f"  {'Page':<25}  {'Total':>5}  Breakdown")
+        print(f"  {'─'*25}  {'─'*5}  {'─'*30}")
         for p in ranked_pages:
-            print(f"  {p:<25}  {page_issues[p]:>6}")
+            parts = []
+            if page_gap_count[p]: parts.append(f"{page_gap_count[p]} missing")
+            if page_dup_count[p]: parts.append(f"{page_dup_count[p]} dups")
+            if page_bad_count[p]: parts.append(f"{page_bad_count[p]} bad-format")
+            print(f"  {p:<25}  {page_issues[p]:>5}  {', '.join(parts)}")
         print()
 
     # ── Write pages_to_redo.txt ───────────────────────────────────────────────
     with open(REDO_PAGES_FILE, "w", encoding="utf-8") as f:
         f.write(f"# pages_to_redo.txt — generated by ocr_error_check.py on {date.today()}\n")
-        f.write(f"# Pages ranked by issue count (misread-ID duplicates + bad-format IDs).\n")
+        f.write(f"# Pages ranked by total issue count (missing IDs + misread dups + bad-format).\n")
         f.write(f"# Edit this file to select which pages to re-scan, then run error_redo.py.\n")
         f.write(f"# Lines starting with # are ignored.  Total pages: {len(ranked_pages)}\n")
         f.write("#\n")
-        f.write(f"# {'Page':<25}  Issues\n")
+        f.write(f"# {'Page':<25}  {'Total':>5}  Breakdown\n")
         for p in ranked_pages:
-            f.write(f"  {p:<25}  # {page_issues[p]} issues\n")
+            parts = []
+            if page_gap_count[p]: parts.append(f"{page_gap_count[p]} missing")
+            if page_dup_count[p]: parts.append(f"{page_dup_count[p]} dups")
+            if page_bad_count[p]: parts.append(f"{page_bad_count[p]} bad-format")
+            f.write(f"  {p:<25}  # {page_issues[p]:>4} issues  [{', '.join(parts)}]\n")
 
     print(f"Wrote {len(ranked_pages)} pages → {REDO_PAGES_FILE.name}")
     print("Edit that file to choose which pages to re-scan, then run error_redo.py.")
