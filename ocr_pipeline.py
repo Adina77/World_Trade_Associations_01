@@ -78,6 +78,7 @@ CHECKPOINT_FILE      = OUTPUT_DIR / "progress.jsonl"   # One JSON record per pag
 FINAL_CSV            = OUTPUT_DIR / "associations_raw.csv"
 FAILED_PAGES_FILE    = OUTPUT_DIR / "failed_pages.jsonl"   # Append-only log of failures
 FAILED_SUMMARY_FILE  = OUTPUT_DIR / "failed_pages_summary.txt"  # Human-readable, regenerated each run
+DUPLICATE_PAGES_FILE = OUTPUT_DIR / "duplicate_pages.txt"  # Written by find_duplicate_pages.py
 
 # Data pages only — front matter ends at image00022, indexes begin at image00401.
 FIRST_PAGE = "image00023.jpg"
@@ -241,15 +242,35 @@ def parse_response(text: str) -> list:
     return json.loads(text.strip())
 
 
+def load_ignored_pages() -> set[str]:
+    """Return the set of image filenames listed in duplicate_pages.txt (if it exists)."""
+    if not DUPLICATE_PAGES_FILE.exists():
+        return set()
+    ignored = set()
+    with open(DUPLICATE_PAGES_FILE, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            token = line.split()[0]
+            if token.endswith(".jpg"):
+                ignored.add(token)
+    return ignored
+
+
 def valid_pages() -> set[str]:
-    """Return the set of page filenames that fall within the data range."""
+    """Return data-range pages, excluding any known duplicate scans."""
     all_images = sorted(p.name for p in IMAGE_DIR.glob("*.jpg"))
     try:
         start = all_images.index(FIRST_PAGE)
         end   = all_images.index(LAST_PAGE) + 1
     except ValueError:
         return set()
-    return set(all_images[start:end])
+    in_range = set(all_images[start:end])
+    ignored  = load_ignored_pages()
+    if ignored:
+        in_range -= ignored
+    return in_range
 
 
 def build_csv():

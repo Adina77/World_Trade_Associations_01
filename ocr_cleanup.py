@@ -5,6 +5,15 @@ ocr_cleanup.py
 Post-processing cleanup for associations_raw.csv.  Run this once after the
 pipeline finishes and produces the raw CSV.  Output is associations_cleaned.csv.
 
+Step 0 — Filter duplicate-scan pages
+  Some book pages were scanned twice, producing two image files that cover
+  the same content.  Both files were OCR'd, producing slightly different
+  text that evades the name-match deduplication in Step 2 and shows up as
+  misread-ID duplicates in the error check.
+
+  If ocr_output/duplicate_pages.txt exists (written by find_duplicate_pages.py),
+  any row whose source_page is listed there is removed before further processing.
+
 Step 1 — Fix embedded newlines
   Some model responses embed actual newline characters inside field values
   (most commonly in address or name).  These break LibreOffice Calc and any
@@ -44,9 +53,10 @@ import csv
 from collections import defaultdict
 from pathlib import Path
 
-OUTPUT_DIR = Path(__file__).parent / "ocr_output"
-INPUT_CSV  = OUTPUT_DIR / "associations_raw.csv"
-OUTPUT_CSV = OUTPUT_DIR / "associations_cleaned.csv"
+OUTPUT_DIR           = Path(__file__).parent / "ocr_output"
+INPUT_CSV            = OUTPUT_DIR / "associations_raw.csv"
+OUTPUT_CSV           = OUTPUT_DIR / "associations_cleaned.csv"
+DUPLICATE_PAGES_FILE = OUTPUT_DIR / "duplicate_pages.txt"
 
 FIELDNAMES = ["id", "country", "name", "address", "focus", "source_page"]
 
@@ -54,6 +64,22 @@ FIELDNAMES = ["id", "country", "name", "address", "focus", "source_page"]
 COUNTRY_OVERRIDES = {
     "Wisconsin": "U.S.A.",   # id 23393: model misread the page heading entirely
 }
+
+
+def load_ignored_pages() -> set[str]:
+    """Return image filenames listed in duplicate_pages.txt (if the file exists)."""
+    if not DUPLICATE_PAGES_FILE.exists():
+        return set()
+    ignored = set()
+    with open(DUPLICATE_PAGES_FILE, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            token = line.split()[0]
+            if token.endswith(".jpg"):
+                ignored.add(token)
+    return ignored
 
 
 def fix_newlines(value: str) -> str:
@@ -130,6 +156,20 @@ def main():
     with open(INPUT_CSV, encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
     print(f"Loaded {len(rows):,} rows from {INPUT_CSV.name}\n")
+
+    # ── Step 0: filter duplicate-scan pages ──────────────────────────────────
+    ignored = load_ignored_pages()
+    if ignored:
+        before = len(rows)
+        rows = [r for r in rows if r.get('source_page', '') not in ignored]
+        removed = before - len(rows)
+        print(f"Step 0 — Duplicate-scan pages removed: {removed} row(s) "
+              f"({len(ignored)} page(s) in duplicate_pages.txt)")
+        for p in sorted(ignored):
+            print(f"  {p}")
+    else:
+        print("Step 0 — duplicate_pages.txt not found; no pages filtered")
+    print()
 
     # ── Step 1: fix embedded newlines ────────────────────────────────────────
     newline_fixes: list[tuple[str, str]] = []
