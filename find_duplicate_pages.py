@@ -53,8 +53,8 @@ LAST_PAGE  = "image00400.jpg"
 MODEL = "gemini-3.1-flash-lite"
 
 # Rate between API calls (seconds).  Flash-lite has a generous free quota;
-# raise to 2–4 if you see 429 rate-limit errors.
-CALL_DELAY = 4
+# raise to 4–5 if you see 429 rate-limit errors.
+CALL_DELAY = 5
 
 # Height (pixels) of the header strip cropped from each image before sending.
 # The top 250 px captures the running header on a ~2800×3900 scan.
