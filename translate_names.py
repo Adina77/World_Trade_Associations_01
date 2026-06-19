@@ -40,7 +40,7 @@ BATCH_SIZE = 500  # names per API call — ~42 calls total for 21k names
 DELAY      = 10  # seconds between calls — 13 sec stays at ~4.6 RPM, safely under the 5 RPM limit
 
 OUTPUT_DIR      = Path(__file__).parent / "ocr_output"
-INPUT_CSV       = OUTPUT_DIR / "associations_cleaned_good.csv"
+INPUT_CSV       = OUTPUT_DIR / "associations_cleaned.csv"
 OUTPUT_CSV      = OUTPUT_DIR / "associations_with_english.csv"
 CHECKPOINT_FILE = OUTPUT_DIR / "translation_progress.jsonl"
 

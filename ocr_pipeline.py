@@ -69,7 +69,7 @@ FALLBACK_CONFIG = types.GenerateContentConfig(safety_settings=_SAFETY_OFF)
 # No JSON mime type — parse_response() handles stripping any markdown fences.
 # For medium thinking 3.1-flash-lite bulk, use 2048. For problem pages, increase to 4096.
 THINKING_CONFIG = types.GenerateContentConfig(
-    thinking_config=types.ThinkingConfig(thinking_budget=4096),
+    thinking_config=types.ThinkingConfig(thinking_budget=2048),
     safety_settings=_SAFETY_OFF,
 )
 
