@@ -67,8 +67,9 @@ FALLBACK_CONFIG = types.GenerateContentConfig(safety_settings=_SAFETY_OFF)
 
 # Thinking config: used with gemini-3.1-flash-lite for bulk processing.
 # No JSON mime type — parse_response() handles stripping any markdown fences.
+# For medium thinking 3.1-flash-lite bulk, use 2048. For problem pages, increase to 4096.
 THINKING_CONFIG = types.GenerateContentConfig(
-    thinking_config=types.ThinkingConfig(thinking_budget=2048),
+    thinking_config=types.ThinkingConfig(thinking_budget=4096),
     safety_settings=_SAFETY_OFF,
 )
 
@@ -142,15 +143,16 @@ Entry structure
   and the ID number, listing journals or newsletters the association publishes
   (e.g. "Periodicals Annual Report (yearly) - Newsletter (monthly)").
   This Periodicals line is NOT part of the Focus field. Stop the focus text
-  before any "Periodicals" content. Do not include publication names in focus.
+  before any "Periodicals" content. Do not include publication names in focus. The focus
+  term is a critical component, but the word is often an abbreviation ("cloth" for "clothing"
+  and "Furnit" for "Furniture"). The correct term is sometimes obvious from the asscociation name.
 
 Association name changes: 
-Occasionally an entry is just an indication that an 
-association has changed its name, and the actual entry is under the new name 
-elsewhere. This can be detected because the entry consists of two association names
-separated by a right-pointing arrow. There is no ID number for these cases and 
-they should be ignored. They must not be assigned an ID number and must not be
-extracted into the output file.
+Occasionally an entry is just an indication that an association has changed its name, 
+and the actual entry is under the new name elsewhere. This can be detected because the entry 
+consists of two association names separated by a right-pointing arrow. There is no ID number 
+for these cases and they should be ignored. They must not be assigned an ID number 
+and must not be extracted into the output file.
 
 Split entries — what to do when an association spans two pages:
   IDs are strictly sequential. The page header shows the range ONLY for
@@ -414,6 +416,7 @@ def main():
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 img      = Image.open(img_path)
+                # CHOOSE CORRECT response depending on model. For 3.1 Flash Lite, use config=THINKING_CONFIG.
                 response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=THINKING_CONFIG)
                 # response = client.models.generate_content(model=MODEL, contents=[PROMPT, img], config=JSON_CONFIG)
                 if response.text is None:
