@@ -135,16 +135,17 @@ def top_candidates(focus_raw: str, abbrev_table: dict[str, str], n: int) -> list
 def build_llm_prompt(batch: list[dict]) -> str:
     """
     batch is a list of dicts, each with keys:
-        row_idx, id, name, focus_ocr, candidates
+        row_idx, id, name, name_english, focus_ocr, candidates
     """
     entries_json = json.dumps(
         [
             {
-                "row_idx":    b["row_idx"],
-                "id":         b["id"],
-                "name":       b["name"],
-                "focus_ocr":  b["focus_ocr"],
-                "candidates": b["candidates"],
+                "row_idx":      b["row_idx"],
+                "id":           b["id"],
+                "name":         b["name"],
+                "name_english": b["name_english"],
+                "focus_ocr":    b["focus_ocr"],
+                "candidates":   b["candidates"],
             }
             for b in batch
         ],
@@ -154,22 +155,25 @@ def build_llm_prompt(batch: list[dict]) -> str:
     return f"""\
 You are correcting OCR errors in a database of trade associations.
 
-Each entry has three fields to work with:
-  - "focus_ocr"  : the abbreviated industry/sector term as read by OCR from a
-                   scanned page. It should match one entry in the official
-                   abbreviation table, but may have one or two characters wrong
-                   due to OCR misreads.
-  - "name"       : the full name of the trade association.
-  - "candidates" : the top matches from the abbreviation table, ranked by
-                   character similarity to focus_ocr. Each candidate has both
-                   an "abbreviation" (the short form) and a "full_term" (its
-                   expanded meaning).
+Each entry has four fields to work with:
+  - "focus_ocr"    : the abbreviated industry/sector term as read by OCR from a
+                     scanned page. It should match one entry in the official
+                     abbreviation table, but may have one or two characters wrong
+                     due to OCR misreads.
+  - "name"         : the original name of the trade association (may be in any language).
+  - "name_english" : English translation of the association name. Use this for
+                     semantic matching against the candidate full_terms, which are
+                     also in English.
+  - "candidates"   : the top matches from the abbreviation table, ranked by
+                     character similarity to focus_ocr. Each candidate has both
+                     an "abbreviation" (the short form) and a "full_term" (its
+                     expanded meaning in English).
 
 Use TWO signals together to pick the best candidate:
   1. Character similarity — which candidate abbreviation is the most plausible
      OCR misread of focus_ocr? (e.g. "Clothg" → "Cloth", "Furnlt" → "Furnit")
   2. Semantic match — which candidate's full_term best describes the industry
-     the association would belong to, given its name?
+     the association would belong to, given its name_english?
 
 When both signals point to the same candidate, that is the answer. When they
 conflict, prefer character similarity (OCR correction is the primary task) but
@@ -240,11 +244,12 @@ def run_llm_pass(low_conf_rows: list[dict], abbrev_table: dict[str, str]) -> dic
         # attach top-N candidates to each row
         payload = [
             {
-                "row_idx":   row["_row_idx"],
-                "id":        row.get("id", ""),
-                "name":      row.get("name", ""),
-                "focus_ocr": row.get("focus", ""),
-                "candidates": top_candidates(row.get("focus", ""), abbrev_table, TOP_N_CANDIDATES),
+                "row_idx":      row["_row_idx"],
+                "id":           row.get("id", ""),
+                "name":         row.get("name", ""),
+                "name_english": row.get("name_English", ""),
+                "focus_ocr":    row.get("focus", ""),
+                "candidates":   top_candidates(row.get("focus", ""), abbrev_table, TOP_N_CANDIDATES),
             }
             for row in batch
         ]
