@@ -130,6 +130,11 @@ def fuzzy_match_terms(focus_raw: str, abbrev_table: dict[str, str], threshold: i
     if not focus_raw or not focus_raw.strip():
         return "", 0, FLAG_EMPTY, []
 
+    # No abbreviation contains a colon, so a colon is always an OCR misread of
+    # the semicolon used to separate multiple focus terms (e.g. "Employers: Commerce"
+    # should be "Employers; Commerce").
+    focus_raw = focus_raw.replace(":", ";")
+
     terms = [t.strip() for t in focus_raw.split(";") if t.strip()]
     per_term = [fuzzy_match(t, abbrev_table, threshold) for t in terms]
     # per_term[i] = (full_term, score, flag) — prepend orig_term for LLM use
