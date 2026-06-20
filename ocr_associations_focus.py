@@ -116,6 +116,44 @@ def fuzzy_match(focus_raw: str, abbrev_table: dict[str, str], threshold: int):
     return full_term, score, FLAG_LOW_CONF
 
 
+def fuzzy_match_terms(focus_raw: str, abbrev_table: dict[str, str], threshold: int):
+    """
+    Handle single or semicolon-separated multi-term focus values.
+
+    Splits on ';', matches each sub-term individually, then combines:
+      focus_full  — '; '-joined full terms (one per sub-term)
+      min_score   — lowest individual score (weakest link sets confidence)
+      flag        — FLAG_LOW_CONF if any sub-term is below threshold, else
+                    FLAG_EXACT if all are exact, else FLAG_FUZZY
+      per_term    — list of (orig_term, full_term, score, flag) for LLM pass
+    """
+    if not focus_raw or not focus_raw.strip():
+        return "", 0, FLAG_EMPTY, []
+
+    terms = [t.strip() for t in focus_raw.split(";") if t.strip()]
+    per_term = [fuzzy_match(t, abbrev_table, threshold) for t in terms]
+    # per_term[i] = (full_term, score, flag) — prepend orig_term for LLM use
+    per_term = [(terms[i], *per_term[i]) for i in range(len(terms))]
+    # per_term[i] = (orig_term, full_term, score, flag)
+
+    scores = [r[2] for r in per_term]
+    flags  = [r[3] for r in per_term]
+
+    focus_full = "; ".join(r[1] for r in per_term)
+    min_score  = min(scores)
+
+    if FLAG_NO_MATCH in flags:
+        combined_flag = FLAG_NO_MATCH
+    elif any(f == FLAG_LOW_CONF for f in flags):
+        combined_flag = FLAG_LOW_CONF
+    elif all(f == FLAG_EXACT for f in flags):
+        combined_flag = FLAG_EXACT
+    else:
+        combined_flag = FLAG_FUZZY
+
+    return focus_full, min_score, combined_flag, per_term
+
+
 def top_candidates(focus_raw: str, abbrev_table: dict[str, str], n: int) -> list[dict]:
     """Return the top-n fuzzy candidates as a list of dicts for the LLM prompt."""
     if not focus_raw or not focus_raw.strip():
@@ -135,12 +173,16 @@ def top_candidates(focus_raw: str, abbrev_table: dict[str, str], n: int) -> list
 def build_llm_prompt(batch: list[dict]) -> str:
     """
     batch is a list of dicts, each with keys:
-        row_idx, id, name, name_english, focus_ocr, candidates
+        row_idx, term_idx, id, name, name_english, focus_ocr, candidates
+
+    Each item is ONE sub-term to resolve (focus values with multiple
+    semicolon-separated terms are flattened to one item per sub-term).
     """
     entries_json = json.dumps(
         [
             {
                 "row_idx":      b["row_idx"],
+                "term_idx":     b["term_idx"],
                 "id":           b["id"],
                 "name":         b["name"],
                 "name_english": b["name_english"],
@@ -155,11 +197,15 @@ def build_llm_prompt(batch: list[dict]) -> str:
     return f"""\
 You are correcting OCR errors in a database of trade associations.
 
-Each entry has four fields to work with:
-  - "focus_ocr"    : the abbreviated industry/sector term as read by OCR from a
-                     scanned page. It should match one entry in the official
-                     abbreviation table, but may have one or two characters wrong
-                     due to OCR misreads.
+Each item below is a SINGLE abbreviated industry/sector term (focus_ocr) that
+could not be matched confidently by fuzzy string matching. A focus field may
+contain multiple semicolon-separated terms; each unresolved term is sent here
+as a separate item with its own row_idx and term_idx.
+
+Each item has these fields:
+  - "focus_ocr"    : one abbreviated industry/sector term as read by OCR. It
+                     should match one entry in the official abbreviation table
+                     but may have one or two characters wrong due to OCR errors.
   - "name"         : the original name of the trade association (may be in any language).
   - "name_english" : English translation of the association name. Use this for
                      semantic matching against the candidate full_terms, which are
@@ -180,14 +226,15 @@ conflict, prefer character similarity (OCR correction is the primary task) but
 use the semantic match as a tiebreaker among equally plausible OCR corrections.
 
 If none of the candidates is a plausible match on either signal, return
-"NO_MATCH" for both fields.
+"NO_MATCH" for both abbreviation and full_term.
 
 Return ONLY a raw JSON array (no markdown, no explanation) with one object per
-entry, in the same order:
+item, in the same order, including both row_idx and term_idx so results can be
+matched back to the correct sub-term:
 
-  {{"row_idx": <integer>, "abbreviation": "<chosen abbreviation or NO_MATCH>", "full_term": "<chosen full_term or NO_MATCH>"}}
+  {{"row_idx": <integer>, "term_idx": <integer>, "abbreviation": "<chosen or NO_MATCH>", "full_term": "<chosen or NO_MATCH>"}}
 
-Entries to resolve:
+Items to resolve:
 {entries_json}
 """
 
@@ -204,24 +251,28 @@ def parse_llm_response(text: str) -> list[dict]:
     return json.loads(text.strip())
 
 
-def run_llm_pass(low_conf_rows: list[dict], abbrev_table: dict[str, str]) -> dict[int, dict]:
+def run_llm_pass(low_conf_rows: list[dict], abbrev_table: dict[str, str]) -> tuple[int, int]:
     """
-    Send low-confidence rows to the LLM in batches.
+    Send unresolved sub-terms to the LLM in batches and update rows in place.
 
-    low_conf_rows: list of enriched row dicts that still have FLAG_LOW_CONF.
-    Returns a dict keyed by row_idx: {"full_term": ..., "abbreviation": ...}
+    Focus values may contain multiple semicolon-separated terms; only the
+    individual sub-terms that scored below threshold are sent (not the whole
+    focus string). Results are applied back per-term and focus_full/focus_flag
+    are reconstructed.
+
+    Returns (n_rows_fully_resolved, n_rows_still_low_confidence).
     """
     try:
         import google.genai as genai
         from google.genai import types
     except ImportError:
         print("  google-genai not installed — skipping LLM pass")
-        return {}
+        return 0, len(low_conf_rows)
 
     api_key = os.environ.get("GOOGLE_API_KEY", "")
     if not api_key:
         print("  GOOGLE_API_KEY not set — skipping LLM pass")
-        return {}
+        return 0, len(low_conf_rows)
 
     safety_off = [
         types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",       threshold="BLOCK_NONE"),
@@ -230,32 +281,35 @@ def run_llm_pass(low_conf_rows: list[dict], abbrev_table: dict[str, str]) -> dic
         types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
     ]
     cfg = types.GenerateContentConfig(safety_settings=safety_off)
+    client = genai.Client(api_key=api_key)
 
-    client  = genai.Client(api_key=api_key)
-    results = {}
+    # Flatten: one item per unresolved sub-term (term_idx tracks position within row)
+    flat_items = []
+    for row in low_conf_rows:
+        for t_idx, (orig_term, _, _, flag) in enumerate(row["_per_term"]):
+            if flag == FLAG_LOW_CONF:
+                flat_items.append({
+                    "row_idx":      row["_row_idx"],
+                    "term_idx":     t_idx,
+                    "id":           row.get("id", ""),
+                    "name":         row.get("name", ""),
+                    "name_english": row.get("name_English", ""),
+                    "focus_ocr":    orig_term,
+                    "candidates":   top_candidates(orig_term, abbrev_table, TOP_N_CANDIDATES),
+                })
 
-    batches = [
-        low_conf_rows[i : i + LLM_BATCH_SIZE]
-        for i in range(0, len(low_conf_rows), LLM_BATCH_SIZE)
-    ]
+    print(f"  {len(flat_items)} sub-terms to resolve across {len(low_conf_rows)} rows")
+
+    # Collect LLM results keyed by (row_idx, term_idx)
+    results: dict[tuple[int, int], dict] = {}
+    batches = [flat_items[i : i + LLM_BATCH_SIZE]
+               for i in range(0, len(flat_items), LLM_BATCH_SIZE)]
     total_batches = len(batches)
 
     for b_idx, batch in enumerate(batches, 1):
-        # attach top-N candidates to each row
-        payload = [
-            {
-                "row_idx":      row["_row_idx"],
-                "id":           row.get("id", ""),
-                "name":         row.get("name", ""),
-                "name_english": row.get("name_English", ""),
-                "focus_ocr":    row.get("focus", ""),
-                "candidates":   top_candidates(row.get("focus", ""), abbrev_table, TOP_N_CANDIDATES),
-            }
-            for row in batch
-        ]
-
-        print(f"  LLM batch {b_idx}/{total_batches} ({len(batch)} rows) ...", end="  ", flush=True)
-        prompt = build_llm_prompt(payload)
+        print(f"  LLM batch {b_idx}/{total_batches} ({len(batch)} sub-terms) ...",
+              end="  ", flush=True)
+        prompt = build_llm_prompt(batch)
 
         for attempt in range(1, LLM_MAX_RETRIES + 1):
             try:
@@ -266,13 +320,14 @@ def run_llm_pass(low_conf_rows: list[dict], abbrev_table: dict[str, str]) -> dic
                     raise ValueError("response.text is None")
                 parsed = parse_llm_response(response.text)
                 for item in parsed:
-                    idx = item.get("row_idx")
-                    if idx is not None:
-                        results[idx] = {
+                    r_idx = item.get("row_idx")
+                    t_idx = item.get("term_idx")
+                    if r_idx is not None and t_idx is not None:
+                        results[(r_idx, t_idx)] = {
                             "abbreviation": item.get("abbreviation", ""),
                             "full_term":    item.get("full_term",    ""),
                         }
-                print(f"{len(parsed)} resolved")
+                print(f"{len(parsed)} sub-terms processed")
                 break
 
             except json.JSONDecodeError as e:
@@ -292,7 +347,23 @@ def run_llm_pass(low_conf_rows: list[dict], abbrev_table: dict[str, str]) -> dic
         if b_idx < total_batches:
             time.sleep(LLM_DELAY)
 
-    return results
+    # Apply results back to per-term lists and reconstruct focus_full / focus_flag
+    for row in low_conf_rows:
+        per_term = row["_per_term"]
+        for t_idx in range(len(per_term)):
+            hit = results.get((row["_row_idx"], t_idx))
+            if hit and hit.get("full_term", "").upper() != "NO_MATCH":
+                orig_term = per_term[t_idx][0]
+                per_term[t_idx] = (orig_term, hit["full_term"], 0, FLAG_LLM)
+
+        row["focus_full"] = "; ".join(r[1] for r in per_term)
+        term_flags = [r[3] for r in per_term]
+        if FLAG_LOW_CONF not in term_flags:
+            row["focus_flag"] = FLAG_LLM
+
+    resolved  = sum(1 for r in low_conf_rows if r["focus_flag"] == FLAG_LLM)
+    still_low = sum(1 for r in low_conf_rows if r["focus_flag"] == FLAG_LOW_CONF)
+    return resolved, still_low
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
@@ -338,11 +409,14 @@ def main():
               FLAG_EMPTY: 0, FLAG_NO_MATCH: 0}
 
     for idx, row in enumerate(rows):
-        full_term, score, flag = fuzzy_match(row.get("focus", ""), abbrev_table, args.threshold)
-        row["focus_full"]  = full_term
+        focus_full, score, flag, per_term = fuzzy_match_terms(
+            row.get("focus", ""), abbrev_table, args.threshold
+        )
+        row["focus_full"]  = focus_full
         row["focus_score"] = score
         row["focus_flag"]  = flag
         row["_row_idx"]    = idx
+        row["_per_term"]   = per_term
         counts[flag] = counts.get(flag, 0) + 1
 
     print(f"  exact          : {counts[FLAG_EXACT]:>6,}")
@@ -356,27 +430,17 @@ def main():
     # ── LLM pass ───────────────────────────────────────────────────────────────
     if args.llm and low_conf:
         print(f"\nLLM pass  ({len(low_conf)} rows → {LLM_MODEL}) ...")
-        llm_results = run_llm_pass(low_conf, abbrev_table)
-
-        resolved = 0
-        for row in low_conf:
-            hit = llm_results.get(row["_row_idx"])
-            if hit and hit.get("full_term", "").upper() != "NO_MATCH":
-                row["focus_full"]  = hit["full_term"]
-                row["focus_score"] = 0      # LLM doesn't produce a numeric score
-                row["focus_flag"]  = FLAG_LLM
-                resolved += 1
-
-        still_low = sum(1 for r in rows if r["focus_flag"] == FLAG_LOW_CONF)
-        print(f"  resolved by LLM : {resolved:>6,}")
-        print(f"  still uncertain : {still_low:>6,}")
+        resolved, still_low = run_llm_pass(low_conf, abbrev_table)
+        print(f"  rows fully resolved by LLM : {resolved:>6,}")
+        print(f"  rows still uncertain       : {still_low:>6,}")
     elif args.llm and not low_conf:
         print("\nNo low-confidence rows — LLM pass skipped.")
 
     # ── write outputs ──────────────────────────────────────────────────────────
-    # Drop the internal index before writing
+    # Drop internal fields before writing
     for row in rows:
-        row.pop("_row_idx", None)
+        row.pop("_row_idx",  None)
+        row.pop("_per_term", None)
 
     original_fields = list(rows[0].keys()) if rows else []
     # Ensure the three new columns come right after focus, and no duplicates
